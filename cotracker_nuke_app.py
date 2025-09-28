@@ -303,17 +303,93 @@ class CoTrackerNukeApp:
         
         return mask
     
+    def extract_mask_from_layers(self, layers_data) -> np.ndarray:
+        """Extract a black and white mask from ImageEditor layers data."""
+        if layers_data is None:
+            self.logger.warning("layers_data is None, returning default empty mask")
+            return np.zeros((512, 512), dtype=np.uint8)  # Default empty mask
+        
+        self.logger.info(f"layers_data type: {type(layers_data)}")
+        
+        # Handle different possible formats of layers_data
+        if isinstance(layers_data, list):
+            self.logger.info(f"layers_data is a list with {len(layers_data)} items")
+            if len(layers_data) == 0:
+                self.logger.warning("layers_data list is empty")
+                return np.zeros((512, 512), dtype=np.uint8)
+            
+            # Use the first (or last) layer that contains actual drawing data
+            for i, layer in enumerate(layers_data):
+                if layer is not None:
+                    self.logger.info(f"Processing layer {i}: {type(layer)}")
+                    if hasattr(layer, 'size'):
+                        self.logger.info(f"Layer {i} size: {layer.size}")
+                    layers_data = layer
+                    break
+            else:
+                self.logger.warning("No valid layers found in list")
+                return np.zeros((512, 512), dtype=np.uint8)
+        
+        # Convert layers to numpy array
+        try:
+            layers_array = np.array(layers_data)
+            self.logger.info(f"layers_array shape: {layers_array.shape}, dtype: {layers_array.dtype}")
+            self.logger.info(f"layers_array unique values: {np.unique(layers_array)}")
+        except Exception as e:
+            self.logger.error(f"Error converting layers_data to numpy array: {e}")
+            return np.zeros((512, 512), dtype=np.uint8)
+        
+        # If RGBA, check alpha channel for painted areas
+        if len(layers_array.shape) >= 3 and layers_array.shape[-1] == 4:  # RGBA
+            self.logger.info("Processing RGBA layers data using alpha channel")
+            # Use alpha channel - painted areas have alpha > 0
+            alpha_channel = layers_array[:, :, 3]
+            self.logger.info(f"Alpha channel shape: {alpha_channel.shape}, unique values: {np.unique(alpha_channel)}")
+            mask = (alpha_channel > 0).astype(np.uint8) * 255
+        elif len(layers_array.shape) >= 3 and layers_array.shape[-1] == 3:  # RGB
+            self.logger.info("Processing RGB layers data")
+            # Look for non-black pixels (assuming black background)
+            # Sum across RGB channels
+            rgb_sum = np.sum(layers_array, axis=2)
+            self.logger.info(f"RGB sum shape: {rgb_sum.shape}, unique values: {np.unique(rgb_sum)}")
+            mask = (rgb_sum > 0).astype(np.uint8) * 255
+        elif len(layers_array.shape) == 2:  # Grayscale
+            self.logger.info("Processing grayscale layers data")
+            mask = (layers_array > 0).astype(np.uint8) * 255
+        else:
+            self.logger.warning(f"Unexpected layers_array shape: {layers_array.shape}")
+            return np.zeros((512, 512), dtype=np.uint8)
+        
+        self.logger.info(f"Final mask shape: {mask.shape}, unique values: {np.unique(mask)}")
+        white_pixels = np.sum(mask == 255)
+        total_pixels = mask.shape[0] * mask.shape[1]
+        coverage = (white_pixels / total_pixels) * 100 if total_pixels > 0 else 0
+        self.logger.info(f"Mask coverage: {white_pixels}/{total_pixels} = {coverage:.2f}%")
+        
+        return mask
+    
     def is_mask_empty(self, mask: np.ndarray) -> bool:
         """Check if mask is empty (all black) or effectively empty."""
         if mask is None:
+            self.logger.info("is_mask_empty: mask is None")
             return True
         
         # Count white pixels (value 255)
         white_pixels = np.sum(mask == 255)
         total_pixels = mask.shape[0] * mask.shape[1]
+        coverage = (white_pixels / total_pixels) * 100 if total_pixels > 0 else 0
         
-        # Consider mask empty if less than 1% of pixels are white
-        return (white_pixels / total_pixels) < 0.01
+        self.logger.info(f"is_mask_empty: {white_pixels}/{total_pixels} white pixels = {coverage:.2f}% coverage")
+        
+        # For very thin masks (like 1024x1), even a few pixels should count
+        # Use a minimum pixel count OR percentage threshold
+        min_pixels_threshold = 5  # At least 5 white pixels
+        percentage_threshold = 0.1  # Or at least 0.1% coverage
+        
+        is_empty = white_pixels < min_pixels_threshold and coverage < percentage_threshold
+        self.logger.info(f"is_mask_empty result: {is_empty} (min_pixels: {white_pixels >= min_pixels_threshold}, percentage: {coverage >= percentage_threshold})")
+        
+        return is_empty
     
     def apply_mask_to_grid(self, queries: torch.Tensor, mask: np.ndarray) -> torch.Tensor:
         """Filter grid queries based on mask. Only keep points in white areas."""
@@ -1263,31 +1339,42 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                 # Add debug logging
                 app.logger.info(f"Processing mask from editor, image type: {type(edited_image)}")
                 
-                # Handle ImageEditor dictionary format
+                # Handle ImageEditor dictionary format - prioritize layers data
                 if isinstance(edited_image, dict):
                     app.logger.info(f"ImageEditor dict keys: {edited_image.keys()}")
-                    if 'composite' in edited_image:
-                        edited_pil = edited_image['composite']
-                    elif 'background' in edited_image:
-                        edited_pil = edited_image['background']
+                    
+                    # Check for layers data first (clean painted areas)
+                    if 'layers' in edited_image and edited_image['layers'] is not None:
+                        app.logger.info("Using layers data for clean mask extraction")
+                        mask = app.extract_mask_from_layers(edited_image['layers'])
                     else:
-                        for key, value in edited_image.items():
-                            if hasattr(value, 'save'):  # PIL Image check
-                                edited_pil = value
-                                break
+                        app.logger.warning("No layers data, using composite/background for difference calculation")
+                        # Fallback to composite/background for difference method
+                        if 'composite' in edited_image:
+                            edited_pil = edited_image['composite']
+                        elif 'background' in edited_image:
+                            edited_pil = edited_image['background']
                         else:
-                            error_msg = f"Could not find image in ImageEditor data. Keys: {list(edited_image.keys())}"
-                            app.logger.error(error_msg)
-                            return error_msg, gr.Accordion(visible=True), "Error extracting image"
+                            for key, value in edited_image.items():
+                                if hasattr(value, 'save'):  # PIL Image check
+                                    edited_pil = value
+                                    break
+                            else:
+                                error_msg = f"Could not find image in ImageEditor data. Keys: {list(edited_image.keys())}"
+                                app.logger.error(error_msg)
+                                return error_msg, "Error extracting image"
+                        
+                        # Use difference method as fallback
+                        edited_array = np.array(edited_pil)
+                        app.logger.info(f"Using difference method, array shape: {edited_array.shape}")
+                        
+                        # Calculate difference between edited and original
+                        mask = app.extract_mask_from_edited_image(app.reference_frame_image, edited_array)
                 else:
-                    edited_pil = edited_image
-                
-                # Convert to numpy array
-                edited_array = np.array(edited_pil)
-                app.logger.info(f"Converted to array: {edited_array.shape}")
-                
-                # Extract mask
-                mask = app.extract_mask_from_edited_image(app.reference_frame_image, edited_array)
+                    # Direct PIL image - use difference method
+                    edited_array = np.array(edited_image)
+                    app.logger.info(f"Direct image, using difference method: {edited_array.shape}")
+                    mask = app.extract_mask_from_edited_image(app.reference_frame_image, edited_array)
                 app.logger.info(f"Extracted mask: {mask.shape}, unique values: {np.unique(mask)}")
                 
                 # Save mask

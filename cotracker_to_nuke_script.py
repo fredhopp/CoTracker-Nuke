@@ -13,7 +13,7 @@ Usage in Nuke:
 import nuke
 import time
 
-def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=False, enable_s=False):
+def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=False, enable_s=False, image_height=1080):
     """
     Create Nuke Tracker4 node from CoTracker CSV data.
     
@@ -23,6 +23,7 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
         enable_t: Enable translate tracking
         enable_r: Enable rotate tracking  
         enable_s: Enable scale tracking
+        image_height: Image height for coordinate conversion (default 1080)
     """
     
     try:
@@ -135,9 +136,12 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
                 x_value = float(frame_data[1])
                 y_value = float(frame_data[2])
                 
-                # Set keyframes
+                # Convert coordinate system: Nuke uses bottom-left origin, CoTracker uses top-left
+                y_value_nuke = image_height - y_value
+                
+                # Set keyframes with converted coordinates
                 tracks.setValueAt(x_value, frame_number, track_x_knob)
-                tracks.setValueAt(y_value, frame_number, track_y_knob)
+                tracks.setValueAt(y_value_nuke, frame_number, track_y_knob)
         
         # Cleanup
         del task
@@ -160,6 +164,7 @@ if __name__ == "__main__":
     enable_t = True      # Enable translate tracking
     enable_r = False     # Enable rotate tracking
     enable_s = False     # Enable scale tracking
+    image_height = 1080  # Image height for coordinate conversion (CoTracker top-left -> Nuke bottom-left)
     
     print("CoTracker CSV to Nuke Tracker Import")
     print("=" * 40)
@@ -169,4 +174,4 @@ if __name__ == "__main__":
     print()
     
     # Run the import
-    cotracker_to_nuke_tracker(csv_path, time_offset, enable_t, enable_r, enable_s)
+    cotracker_to_nuke_tracker(csv_path, time_offset, enable_t, enable_r, enable_s, image_height)

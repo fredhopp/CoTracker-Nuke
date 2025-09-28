@@ -106,7 +106,9 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
             # Add new track
             tracker_node['add_track'].execute()
             
-            print(f"Creating track {tracker_id} for point {point_id} with {len(track_data)} keyframes")
+            # Minimal printing - only every 10th track to avoid spam
+            if tracker_id % 10 == 0 or tracker_id == len(sorted(tracker_dict.keys())) - 1:
+                print(f"Processing track {tracker_id + 1}/{len(sorted(tracker_dict.keys()))}...")
             
             # Calculate knob indices for this track (exact same as DL_Syn2Trackers)
             track_x_knob = tracker_id * columns + 2  # track_x column
@@ -153,11 +155,18 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
 # Main execution
 if __name__ == "__main__":
     # Configuration - EDIT THESE VALUES
-    csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_142216.csv"  # Path to your CoTracker CSV
+    csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_161516.csv"  # Path to your CoTracker CSV (smaller dataset)
     time_offset = 0      # Frame offset (usually 0 for CoTracker)
     enable_t = True      # Enable translate tracking
     enable_r = False     # Enable rotate tracking
     enable_s = False     # Enable scale tracking
+    
+    print("CoTracker CSV to Nuke Tracker Import")
+    print("=" * 40)
+    print(f"CSV File: {csv_path}")
+    print(f"Settings: T={enable_t}, R={enable_r}, S={enable_s}")
+    print(f"Time Offset: {time_offset}")
+    print()
     
     # Run the import
     cotracker_to_nuke_tracker(csv_path, time_offset, enable_t, enable_r, enable_s)

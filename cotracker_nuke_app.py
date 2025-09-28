@@ -368,19 +368,24 @@ class CoTrackerNukeApp:
         instructions_path = output_path.replace('.nk', '_instructions.txt')
         instructions = f"""CoTracker to Nuke Import Instructions:
 
+OPTION 1 - Use Generated Script:
 1. Open Nuke
 2. Open the Script Editor (Alt+Shift+S)
 3. Load the script: {script_path}
 4. Run the script (Ctrl+Enter)
 
+OPTION 2 - Use Standalone CSV Script:
+1. Use the cotracker_to_nuke_script.py with your CSV file
+2. Edit the csv_path variable in the script
+3. Run in Nuke's Script Editor
+
 The script will create a Tracker4 node with {coords.shape[1]} tracks across {coords.shape[0]} frames.
 
-Alternatively, you can:
-- Copy the contents of {script_path}
-- Paste into Nuke's Script Editor
-- Run the script
-
-The tracks will be automatically created and ready to use!
+RESULT:
+- Creates Tracker4 node named "CoTracker_Import"
+- All tracks with proper keyframes
+- Translate tracking enabled by default
+- Ready for match-moving, stabilization, etc.
 """
         
         with open(instructions_path, 'w') as f:

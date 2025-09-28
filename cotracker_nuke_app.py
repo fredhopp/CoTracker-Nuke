@@ -30,45 +30,304 @@ import json
 import tempfile
 from scipy.spatial.distance import pdist, squareform
 from scipy.optimize import linear_sum_assignment
+import logging
+from datetime import datetime
 
 
 class CoTrackerNukeApp:
     """Main application class for CoTracker-Nuke integration."""
     
-    def __init__(self):
+    def __init__(self, debug_mode=True):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.cotracker_model = None
         self.current_video = None
         self.tracking_results = None
         self.selected_points = []
+        self.debug_mode = debug_mode
+        
+        # Set up debug directory
+        self.debug_dir = Path("Z:/Dev/Cotracker/temp")
+        self.debug_dir.mkdir(exist_ok=True)
+        
+        # Set up logging
+        if self.debug_mode:
+            self.setup_logging()
+    
+    def setup_logging(self):
+        """Set up logging for debug information."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = self.debug_dir / f"cotracker_debug_{timestamp}.log"
+        
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()  # Also log to console
+            ]
+        )
+        
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("="*60)
+        self.logger.info("CoTracker Debug Session Started")
+        self.logger.info(f"Debug directory: {self.debug_dir}")
+        self.logger.info(f"Device: {self.device}")
+        self.logger.info("="*60)
+    
+    def log_video_info(self, video: np.ndarray, video_path: str = None):
+        """Log detailed video information."""
+        if not self.debug_mode:
+            return
+            
+        self.logger.info("VIDEO INFORMATION:")
+        self.logger.info(f"  Source: {video_path if video_path else 'Unknown'}")
+        self.logger.info(f"  Shape: {video.shape}")
+        self.logger.info(f"  Frames: {video.shape[0]}")
+        self.logger.info(f"  Resolution: {video.shape[2]}x{video.shape[1]}")
+        self.logger.info(f"  Channels: {video.shape[3]}")
+        self.logger.info(f"  Data type: {video.dtype}")
+        self.logger.info(f"  Memory usage: {video.nbytes / 1024 / 1024:.1f} MB")
+    
+    def log_tracking_params(self, grid_size: int, reference_frame: int, preview_downsample: int):
+        """Log tracking parameters."""
+        if not self.debug_mode:
+            return
+            
+        self.logger.info("TRACKING PARAMETERS:")
+        self.logger.info(f"  Grid size: {grid_size}")
+        self.logger.info(f"  Reference frame: {reference_frame}")
+        self.logger.info(f"  Preview downsample: 1/{preview_downsample}")
+        self.logger.info(f"  Expected total points: {grid_size * grid_size}")
+        preview_points_per_axis = max(1, grid_size // preview_downsample)
+        self.logger.info(f"  Preview points per axis: {preview_points_per_axis}")
+        self.logger.info(f"  Expected preview points: {preview_points_per_axis * preview_points_per_axis}")
+    
+    def log_tracking_results(self, tracks: torch.Tensor, visibility: torch.Tensor):
+        """Log tracking results."""
+        if not self.debug_mode:
+            return
+            
+        self.logger.info("TRACKING RESULTS:")
+        self.logger.info(f"  Tracks tensor shape: {tracks.shape}")
+        self.logger.info(f"  Visibility tensor shape: {visibility.shape}")
+        self.logger.info(f"  Total points tracked: {tracks.shape[2]}")
+        self.logger.info(f"  Total frames processed: {tracks.shape[1]}")
+        
+        # Calculate visibility statistics
+        visibility_np = visibility[0].cpu().numpy()
+        if len(visibility_np.shape) == 3:
+            visibility_np = visibility_np[:, :, 0]
+        
+        total_visible = np.sum(visibility_np > 0.5)
+        total_possible = visibility_np.size
+        visibility_percentage = (total_visible / total_possible) * 100
+        
+        self.logger.info(f"  Visible track points: {total_visible}/{total_possible} ({visibility_percentage:.1f}%)")
+        
+        # Per-point visibility
+        point_visibility = np.mean(visibility_np > 0.5, axis=0)
+        self.logger.info(f"  Best tracked point visibility: {np.max(point_visibility):.1%}")
+        self.logger.info(f"  Worst tracked point visibility: {np.min(point_visibility):.1%}")
+        self.logger.info(f"  Average point visibility: {np.mean(point_visibility):.1%}")
+    
+    def export_coordinates(self, tracks: torch.Tensor, visibility: torch.Tensor, 
+                          grid_size: int, preview_downsample: int, reference_frame: int):
+        """Export coordinate data to files."""
+        if not self.debug_mode:
+            return
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Convert to numpy
+        tracks_np = tracks[0].cpu().numpy()  # Shape: (T, N, 2)
+        visibility_np = visibility[0].cpu().numpy()  # Shape: (T, N) or (T, N, 1)
+        
+        if len(visibility_np.shape) == 3:
+            visibility_np = visibility_np[:, :, 0]
+        
+        T, N, _ = tracks_np.shape
+        
+        # Export full grid coordinates
+        full_coords_file = self.debug_dir / f"full_grid_coords_{timestamp}.json"
+        full_data = {
+            "metadata": {
+                "timestamp": timestamp,
+                "grid_size": grid_size,
+                "reference_frame": reference_frame,
+                "total_points": N,
+                "total_frames": T,
+                "shape": tracks_np.shape
+            },
+            "coordinates": {},
+            "visibility": {}
+        }
+        
+        for frame in range(T):
+            full_data["coordinates"][f"frame_{frame}"] = []
+            full_data["visibility"][f"frame_{frame}"] = []
+            
+            for point in range(N):
+                x, y = tracks_np[frame, point]
+                vis = float(visibility_np[frame, point])
+                
+                full_data["coordinates"][f"frame_{frame}"].append({
+                    "point_id": point,
+                    "x": float(x),
+                    "y": float(y)
+                })
+                full_data["visibility"][f"frame_{frame}"].append({
+                    "point_id": point,
+                    "visible": vis > 0.5,
+                    "confidence": vis
+                })
+        
+        with open(full_coords_file, 'w') as f:
+            json.dump(full_data, f, indent=2)
+        
+        self.logger.info(f"Full grid coordinates exported to: {full_coords_file}")
+        
+        # Export preview grid coordinates
+        preview_points_per_axis = max(1, grid_size // preview_downsample)
+        max_preview_points = preview_points_per_axis * preview_points_per_axis
+        
+        # Select preview points (same logic as in _create_preview_video)
+        selected_point_indices = self._select_preview_points(tracks_np, visibility_np, max_preview_points)
+        
+        preview_coords_file = self.debug_dir / f"preview_grid_coords_{timestamp}.json"
+        preview_data = {
+            "metadata": {
+                "timestamp": timestamp,
+                "grid_size": grid_size,
+                "reference_frame": reference_frame,
+                "preview_downsample": preview_downsample,
+                "preview_points_per_axis": preview_points_per_axis,
+                "max_preview_points": max_preview_points,
+                "actual_preview_points": len(selected_point_indices),
+                "selected_point_indices": selected_point_indices
+            },
+            "coordinates": {},
+            "visibility": {}
+        }
+        
+        for frame in range(T):
+            preview_data["coordinates"][f"frame_{frame}"] = []
+            preview_data["visibility"][f"frame_{frame}"] = []
+            
+            for i, point_idx in enumerate(selected_point_indices):
+                x, y = tracks_np[frame, point_idx]
+                vis = float(visibility_np[frame, point_idx])
+                
+                preview_data["coordinates"][f"frame_{frame}"].append({
+                    "preview_id": i,
+                    "original_point_id": point_idx,
+                    "x": float(x),
+                    "y": float(y)
+                })
+                preview_data["visibility"][f"frame_{frame}"].append({
+                    "preview_id": i,
+                    "original_point_id": point_idx,
+                    "visible": vis > 0.5,
+                    "confidence": vis
+                })
+        
+        with open(preview_coords_file, 'w') as f:
+            json.dump(preview_data, f, indent=2)
+        
+        self.logger.info(f"Preview grid coordinates exported to: {preview_coords_file}")
+        
+        # Export CSV files for easier analysis
+        self._export_coordinates_csv(tracks_np, visibility_np, selected_point_indices, timestamp, reference_frame)
+    
+    def _select_preview_points(self, tracks_np: np.ndarray, visibility_np: np.ndarray, max_points: int) -> List[int]:
+        """Select preview points using the same logic as the preview video."""
+        total_points = tracks_np.shape[1]
+        
+        if total_points <= max_points:
+            return list(range(total_points))
+        
+        # Use first frame to select points with good spatial distribution
+        first_frame_tracks = tracks_np[0]  # (N, 2)
+        first_frame_visibility = visibility_np[0]  # (N,)
+        
+        # Get initially visible points
+        visible_mask = first_frame_visibility > 0.5
+        visible_indices = np.where(visible_mask)[0]
+        
+        if len(visible_indices) <= max_points:
+            return visible_indices.tolist()
+        
+        # Sample evenly from visible points
+        step = max(1, len(visible_indices) // max_points)
+        selected_indices = visible_indices[::step][:max_points]
+        
+        return selected_indices.tolist()
+    
+    def _export_coordinates_csv(self, tracks_np: np.ndarray, visibility_np: np.ndarray, 
+                               selected_indices: List[int], timestamp: str, reference_frame: int):
+        """Export coordinates in CSV format for easier analysis."""
+        import csv
+        
+        T, N, _ = tracks_np.shape
+        
+        # Export full coordinates CSV
+        full_csv_file = self.debug_dir / f"full_coords_{timestamp}.csv"
+        with open(full_csv_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['frame', 'point_id', 'x', 'y', 'visible', 'confidence', 'is_reference_frame'])
+            
+            for frame in range(T):
+                for point in range(N):
+                    x, y = tracks_np[frame, point]
+                    vis = float(visibility_np[frame, point])
+                    is_ref = frame == reference_frame
+                    
+                    writer.writerow([frame, point, f"{x:.2f}", f"{y:.2f}", 
+                                   vis > 0.5, f"{vis:.3f}", is_ref])
+        
+        # Export preview coordinates CSV
+        preview_csv_file = self.debug_dir / f"preview_coords_{timestamp}.csv"
+        with open(preview_csv_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['frame', 'preview_id', 'original_point_id', 'x', 'y', 'visible', 'confidence', 'is_reference_frame'])
+            
+            for frame in range(T):
+                for i, point_idx in enumerate(selected_indices):
+                    x, y = tracks_np[frame, point_idx]
+                    vis = float(visibility_np[frame, point_idx])
+                    is_ref = frame == reference_frame
+                    
+                    writer.writerow([frame, i, point_idx, f"{x:.2f}", f"{y:.2f}", 
+                                   vis > 0.5, f"{vis:.3f}", is_ref])
+        
+        self.logger.info(f"CSV coordinates exported to: {full_csv_file} and {preview_csv_file}")
         
     def load_cotracker_model(self):
         """Load CoTracker model from torch hub."""
         try:
             print(f"Loading CoTracker model on {self.device}...")
-            # Use CoTracker2 for better compatibility with custom queries
-            # CoTracker3 offline doesn't properly support the queries parameter
+            # Prioritize CoTracker3 offline for best bidirectional tracking
             try:
                 self.cotracker_model = torch.hub.load(
                     "facebookresearch/co-tracker", 
-                    "cotracker2"
+                    "cotracker3_offline"
                 ).to(self.device)
-                print("CoTracker2 model loaded successfully (best for custom reference frames)")
+                print("CoTracker3 offline model loaded successfully (best for bidirectional tracking)")
             except Exception as e:
-                print(f"CoTracker2 not available, trying CoTracker3 offline: {e}")
+                print(f"CoTracker3 offline not available, trying CoTracker2: {e}")
                 try:
                     self.cotracker_model = torch.hub.load(
                         "facebookresearch/co-tracker", 
-                        "cotracker3_offline"
+                        "cotracker2"
                     ).to(self.device)
-                    print("CoTracker3 offline model loaded successfully")
+                    print("CoTracker2 model loaded successfully (fallback with bidirectional support)")
                 except Exception as e2:
-                    print(f"CoTracker3 offline not available, trying online: {e2}")
+                    print(f"CoTracker2 not available, trying CoTracker3 online: {e2}")
                     self.cotracker_model = torch.hub.load(
                         "facebookresearch/co-tracker", 
                         "cotracker3_online"
                     ).to(self.device)
-                    print("CoTracker3 online model loaded successfully")
+                    print("CoTracker3 online model loaded successfully (forward-only tracking)")
                 
         except Exception as e:
             print(f"Error loading CoTracker model: {e}")
@@ -103,8 +362,10 @@ class CoTrackerNukeApp:
                 queries.append([reference_frame, x, y])
         
         # Convert to tensor format expected by CoTracker
-        queries_tensor = torch.tensor(queries, dtype=torch.float32, device=self.device)
+        # CoTracker2 expects queries with shape [B, N, 3] where B=batch_size, N=num_queries, 3=(frame, x, y)
+        queries_tensor = torch.tensor([queries], dtype=torch.float32, device=self.device)  # Add batch dimension
         print(f"Generated {len(queries)} query points on frame {reference_frame}")
+        print(f"Query tensor shape: {queries_tensor.shape}")
         
         return queries_tensor
     
@@ -114,6 +375,10 @@ class CoTrackerNukeApp:
             # Use imageio.v3.imread for video files
             frames = iio.imread(video_path, plugin="FFMPEG")
             print(f"Loaded video: {frames.shape}")
+            
+            # Log video information
+            self.log_video_info(frames, video_path)
+            
             return frames
         except Exception as e:
             print(f"Error loading video with imageio.v3, trying alternative method: {e}")
@@ -152,6 +417,11 @@ class CoTrackerNukeApp:
         """Track points in video using CoTracker."""
         if self.cotracker_model is None:
             self.load_cotracker_model()
+        
+        # Log tracking parameters
+        if self.debug_mode:
+            self.logger.info("Starting point tracking...")
+            # Note: preview_downsample is not available here, will be logged in process_video
         
         # Convert video to tensor format (B, T, C, H, W)
         video_tensor = torch.tensor(video).permute(0, 3, 1, 2)[None].float().to(self.device)
@@ -208,31 +478,37 @@ class CoTrackerNukeApp:
                     pred_visibility = full_visibility
             else:
                 # CoTracker2 or offline model
-                print("Using CoTracker2/offline API")
+                print("Using CoTracker2/CoTracker3 offline API")
                 with torch.no_grad():
                     if reference_frame == 0:
-                        # Use automatic grid on first frame
+                        # Use automatic grid on first frame with bidirectional tracking
                         pred_tracks, pred_visibility = self.cotracker_model(
                             video_tensor, 
-                            grid_size=grid_size
+                            grid_size=grid_size,
+                            backward_tracking=True  # Enable bidirectional tracking
                         )
                     else:
-                        # Use custom queries with specified reference frame
-                        print(f"Using custom reference frame: {reference_frame}")
+                        # Use custom queries with specified reference frame and bidirectional tracking
+                        print(f"Using custom reference frame: {reference_frame} with bidirectional tracking")
                         queries = self._generate_grid_queries(video, grid_size, reference_frame)
                         pred_tracks, pred_visibility = self.cotracker_model(
                             video_tensor, 
-                            queries=queries
+                            queries=queries,
+                            backward_tracking=True  # CRITICAL: Enable bidirectional tracking
                         )
             
             print(f"Tracking completed. Tracks shape: {pred_tracks.shape}")
+            
+            # Log tracking results
+            self.log_tracking_results(pred_tracks, pred_visibility)
+            
             return pred_tracks, pred_visibility
             
         except Exception as e:
             print(f"Error during tracking: {e}")
-            # Try fallback to CoTracker2
+            # Try fallback to CoTracker2 with bidirectional tracking
             try:
-                print("Trying fallback to CoTracker2...")
+                print("Trying fallback to CoTracker2 with bidirectional tracking...")
                 self.cotracker_model = torch.hub.load(
                     "facebookresearch/co-tracker", 
                     "cotracker2"
@@ -241,7 +517,8 @@ class CoTrackerNukeApp:
                 with torch.no_grad():
                     pred_tracks, pred_visibility = self.cotracker_model(
                         video_tensor, 
-                        grid_size=grid_size
+                        grid_size=grid_size,
+                        backward_tracking=True  # Enable bidirectional tracking in fallback
                     )
                 
                 print(f"Fallback successful. Tracks shape: {pred_tracks.shape}")
@@ -509,7 +786,7 @@ ypos 100
 def create_gradio_interface():
     """Create Gradio interface for the application."""
     
-    app = CoTrackerNukeApp()
+    app = CoTrackerNukeApp(debug_mode=True)  # Enable debug mode
     app.reference_frame = 0  # Default to frame 0
     
     def load_video_for_reference(reference_video):
@@ -522,10 +799,7 @@ def create_gradio_interface():
             app.current_video = video
             
             # Create a simple preview video for reference frame selection
-            import tempfile
-            import os
-            temp_dir = tempfile.gettempdir()
-            temp_video_path = os.path.join(temp_dir, f"reference_video_{os.getpid()}.mp4")
+            temp_video_path = app.debug_dir / f"reference_video_{os.getpid()}.mp4"
             
             # Save the full video for reference frame selection
             preview_frames = video  # Use full video for reference frame selection
@@ -581,9 +855,15 @@ def create_gradio_interface():
             video = app.load_video(reference_video)
             app.current_video = video
             
+            # Log tracking parameters
+            app.log_tracking_params(grid_size, app.reference_frame, preview_downsample)
+            
             # Track points with reference frame
             tracks, visibility = app.track_points(video, grid_size, app.reference_frame)
             app.tracking_results = (tracks, visibility)
+            
+            # Export coordinate data for debugging
+            app.export_coordinates(tracks, visibility, grid_size, preview_downsample, app.reference_frame)
             
             # Calculate preview points from downsampling ratio
             # If grid_size=50 and downsample=4, show every 4th point -> 50/4 = ~12 points per axis
@@ -607,7 +887,15 @@ Tracking completed successfully!
 - Preview downsampling: 1/{preview_downsample} (showing ~{max_preview_points} points)
 - Processing device: {app.device}
 - CoTracker frames: {tracks.shape[1]} (internal processing)
-- Note: CoTracker3 generates more frames for temporal precision
+
+DEBUG OUTPUT:
+- Debug files saved to: Z:/Dev/Cotracker/temp/
+- Log file: Contains detailed processing information
+- Full grid coordinates: JSON and CSV format with all {tracks.shape[2]} points
+- Preview grid coordinates: JSON and CSV format with ~{max_preview_points} points
+- Preview video: Saved for visual inspection
+
+Note: All coordinate data includes visibility confidence and reference frame markers.
             """
             
             return result_text, preview_video
@@ -892,6 +1180,14 @@ def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor,
         if scale_factor != 1.0:
             frame = cv2.resize(frame, (new_width, new_height))
         
+        # Add frame number overlay in top-left corner
+        frame_text = f'Frame: {frame_idx}'
+        # White text with black outline for better visibility
+        cv2.putText(frame, frame_text, (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)  # Black outline (thicker)
+        cv2.putText(frame, frame_text, (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)  # White text
+        
         # Map video frame index to tracking frame index
         # Direct 1:1 mapping since we fixed the sliding window processing
         track_frame_idx = frame_idx
@@ -934,13 +1230,6 @@ def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor,
                         cv2.circle(frame, (x, y), 4, color, -1)
                         cv2.circle(frame, (x, y), 6, (255, 255, 255), 1)  # White outline
                         
-                        # Add point number for visible points (up to 50 for better grid visualization)
-                        if idx_pos < min(50, len(selected_point_indices)):  # Show numbers for up to 50 points
-                            cv2.putText(frame, str(idx_pos + 1), (x+8, y-8), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 2)
-                            cv2.putText(frame, str(idx_pos + 1), (x+8, y-8), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)  # Black outline
-                        
                         points_drawn += 1
             
             print(f"Frame {i}: Video {frame_idx}/{video.shape[0]} -> Track {track_frame_idx}/{tracks_np.shape[0]}, Drew {points_drawn}/{max_points_to_show} points")
@@ -948,8 +1237,7 @@ def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor,
         preview_frames.append(frame)
     
     # Save as temporary video file with optimized settings
-    temp_dir = tempfile.gettempdir()
-    temp_video_path = os.path.join(temp_dir, f"cotracker_preview_{os.getpid()}.mp4")
+    temp_video_path = self.debug_dir / f"cotracker_preview_{os.getpid()}.mp4"
     
     try:
         import imageio.v3 as iio
@@ -1011,7 +1299,8 @@ def _create_preview_image_sequence(self, video: np.ndarray, tracks: torch.Tensor
         new_width = original_width
         new_height = original_height
     
-    temp_dir = tempfile.mkdtemp()
+    temp_dir = self.debug_dir / "image_sequence"
+    temp_dir.mkdir(exist_ok=True)
     image_paths = []
     
     for i, frame_idx in enumerate(range(0, video.shape[0], step)):

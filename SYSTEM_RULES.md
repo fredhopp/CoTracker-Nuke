@@ -14,10 +14,11 @@
 - Always install packages using `pip install` within the activated virtual environment
 
 ### Model Selection
-- **Use CoTracker2 model for best compatibility with custom reference frames**
-- CoTracker3 offline doesn't properly support the queries parameter for custom reference frames
-- CoTracker2 provides reliable tracking with both automatic grid and custom query support
-- Falls back to CoTracker3 offline if CoTracker2 is not available
+- **ALWAYS use CoTracker3 offline as the primary model**
+- CoTracker3 offline provides superior temporal consistency and bidirectional tracking
+- **CRITICAL: Always use backward_tracking=True parameter for proper bidirectional tracking**
+- Falls back to CoTracker2 (with backward_tracking=True) if CoTracker3 offline is not available
+- CoTracker3 online does NOT support backward_tracking parameter and should be last resort
 
 ### General Development
 - Follow these rules consistently throughout the project

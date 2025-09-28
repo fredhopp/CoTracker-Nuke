@@ -278,6 +278,444 @@ class CoTrackerNukeApp:
         
         return str(mask_path)
     
+    def export_to_nuke(self, tracking_data: dict, output_path: str) -> str:
+        """Export tracking data to Nuke .nk format using Nuke Python API."""
+        try:
+            # Parse tracking data
+            coords = tracking_data['coords']  # Shape: [num_frames, num_points, 2]
+            visibility = tracking_data['visibility']  # Shape: [num_frames, num_points]
+            
+            num_frames, num_points, _ = coords.shape
+            self.logger.info(f"Exporting {num_points} tracks across {num_frames} frames to Nuke format using API")
+            
+            # Try to use Nuke API first, fallback to manual generation
+            try:
+                return self._export_via_nuke_api(coords, visibility, output_path)
+            except Exception as api_error:
+                self.logger.warning(f"Nuke API export failed: {api_error}")
+                self.logger.info("Falling back to manual script generation")
+                return self._export_via_manual_generation(coords, visibility, output_path)
+            
+        except Exception as e:
+            error_msg = f"Error exporting to Nuke: {str(e)}"
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+    
+    def _export_via_nuke_api(self, coords, visibility, output_path: str) -> str:
+        """Export using Nuke Python API."""
+        import subprocess
+        import os
+        
+        # Try to find Nuke executable
+        possible_nuke_paths = [
+            "C:/Program Files/Nuke16.0v5/Nuke16.0.exe",
+            "C:/Program Files/Nuke15.1v1/Nuke15.1.exe", 
+            "C:/Program Files/Nuke14.0v5/Nuke14.0.exe",
+            "C:/Program Files/Nuke13.2v7/Nuke13.2.exe",
+        ]
+        
+        nuke_executable = None
+        for path in possible_nuke_paths:
+            if os.path.exists(path):
+                nuke_executable = path
+                break
+        
+        if nuke_executable is None:
+            raise Exception("Could not find Nuke executable")
+        
+        # Create Nuke Python script
+        script_content = self._generate_nuke_api_script(coords, visibility, output_path)
+        script_path = output_path.replace('.nk', '_generator.py')
+        
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+        
+        # Execute Nuke in non-interactive mode
+        cmd = [nuke_executable, "-t", script_path]
+        
+        self.logger.info(f"Executing Nuke: {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        
+        if result.returncode == 0:
+            self.logger.info("Nuke API export successful")
+            self.logger.info(f"Nuke output: {result.stdout}")
+            
+            # Clean up the generator script
+            try:
+                os.remove(script_path)
+            except:
+                pass
+            
+            return output_path
+        else:
+            raise Exception(f"Nuke execution failed: {result.stderr}")
+    
+    def _export_via_manual_generation(self, coords, visibility, output_path: str) -> str:
+        """Fallback to manual script generation - creates Nuke Python script."""
+        # Generate a Nuke Python script that can be run inside Nuke
+        script_content = self._generate_nuke_import_script(coords, visibility)
+        
+        # Save as .py file that can be run in Nuke
+        script_path = output_path.replace('.nk', '_import_script.py')
+        
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+        
+        self.logger.info(f"Nuke import script exported to: {script_path}")
+        
+        # Also create instructions file
+        instructions_path = output_path.replace('.nk', '_instructions.txt')
+        instructions = f"""CoTracker to Nuke Import Instructions:
+
+1. Open Nuke
+2. Open the Script Editor (Alt+Shift+S)
+3. Load the script: {script_path}
+4. Run the script (Ctrl+Enter)
+
+The script will create a Tracker4 node with {coords.shape[1]} tracks across {coords.shape[0]} frames.
+
+Alternatively, you can:
+- Copy the contents of {script_path}
+- Paste into Nuke's Script Editor
+- Run the script
+
+The tracks will be automatically created and ready to use!
+"""
+        
+        with open(instructions_path, 'w') as f:
+            f.write(instructions)
+        
+        return script_path
+    
+    def _generate_nuke_import_script(self, coords, visibility) -> str:
+        """Generate a Nuke Python script that creates tracks from CoTracker data."""
+        num_frames, num_points, _ = coords.shape
+        
+        # Convert data to lists for embedding in script
+        coords_list = coords.tolist()
+        visibility_list = visibility.tolist()
+        
+        return f'''#!/usr/bin/env python
+"""
+CoTracker to Nuke Tracker Script
+Auto-generated script to create Tracker4 node with CoTracker data.
+"""
+
+import nuke
+import time
+
+def create_cotracker_tracks():
+    """Create Tracker4 node with embedded CoTracker data."""
+    
+    try:
+        print("Creating CoTracker tracks in Nuke...")
+        
+        # Embedded tracking data
+        coords = {coords_list}
+        visibility = {visibility_list}
+        
+        num_frames = {num_frames}
+        num_points = {num_points}
+        
+        print(f"Data: {{num_points}} tracks across {{num_frames}} frames")
+        
+        # Create Tracker4 node
+        tracker_node = nuke.createNode("Tracker4")
+        tracker_node.setName("CoTracker_Import")
+        tracker_node.knob("selected").setValue(True)
+        
+        # Access tracks knob
+        tracks = tracker_node["tracks"]
+        columns = 31  # Number of columns per track in Nuke
+        
+        # Create progress task
+        task = nuke.ProgressTask("CoTracker Import")
+        task.setMessage("Creating tracks from CoTracker data...")
+        
+        # Create tracks
+        for point_id in range(num_points):
+            # Update progress
+            progress = int((point_id / num_points) * 100)
+            task.setProgress(progress)
+            task.setMessage(f"Creating track {{point_id + 1}}/{{num_points}}")
+            
+            if task.isCancelled():
+                break
+            
+            # Add new track
+            tracker_node['add_track'].execute()
+            
+            # Calculate knob indices for this track
+            track_x_knob = point_id * columns + 2  # track_x column
+            track_y_knob = point_id * columns + 3  # track_y column
+            
+            # T/R/S options (enable translate by default)
+            t_option = point_id * columns + 6
+            r_option = point_id * columns + 7
+            s_option = point_id * columns + 8
+            
+            # Set T/R/S options (exact same logic as DL_Syn2Trackers)
+            tracks.setValue(1, t_option)  # Enable translate by default
+            tracks.setValue(0, r_option)  # Disable rotate
+            tracks.setValue(0, s_option)  # Disable scale
+            
+            # Set keyframes for this track
+            for frame in range(num_frames):
+                if visibility[frame][point_id]:  # Only set keyframes for visible points
+                    x_value = coords[frame][point_id][0]
+                    y_value = coords[frame][point_id][1]
+                    
+                    # Set keyframes
+                    tracks.setValueAt(x_value, frame, track_x_knob)
+                    tracks.setValueAt(y_value, frame, track_y_knob)
+        
+        # Set reference frame to middle
+        reference_frame = num_frames // 2
+        tracker_node["reference_frame"].setValue(reference_frame)
+        
+        # Cleanup
+        del task
+        
+        print(f"✅ Successfully created {{num_points}} tracks!")
+        nuke.message(f'CoTracker import completed!\\\\n\\\\nCreated {{num_points}} tracks across {{num_frames}} frames.')
+        
+    except Exception as e:
+        error_msg = f"Error creating CoTracker tracks: {{str(e)}}"
+        print(error_msg)
+        nuke.message(error_msg)
+        import traceback
+        traceback.print_exc()
+
+# Run the function
+if __name__ == "__main__":
+    create_cotracker_tracks()
+else:
+    # If loaded as module, you can call create_cotracker_tracks() manually
+    create_cotracker_tracks()
+'''
+    
+    def _generate_nuke_api_script(self, coords, visibility, output_path: str) -> str:
+        """Generate Nuke Python API script."""
+        num_frames, num_points, _ = coords.shape
+        
+        return f'''#!/usr/bin/env python
+"""Auto-generated Nuke script to create Tracker4 node with CoTracker data"""
+
+import nuke
+import numpy as np
+
+def create_tracker_with_data():
+    """Create Tracker4 node and populate with tracking data."""
+    
+    # Clear existing nodes
+    nuke.selectAll()
+    nuke.delete()
+    
+    # Create Tracker4 node
+    tracker = nuke.createNode("Tracker4")
+    tracker.setName("CoTracker_Export")
+    
+    # Set basic tracker properties
+    tracker['grablink_error_above'].setValue(0.01)
+    
+    # Tracking data
+    coords = np.array({coords.tolist()})
+    visibility = np.array({visibility.tolist()})
+    
+    num_frames, num_points, _ = coords.shape
+    print(f"Creating tracker with {{num_points}} tracks across {{num_frames}} frames")
+    
+    # Add tracks to the tracker
+    for point_id in range(num_points):
+        track_name = f"track_{{point_id + 1}}"
+        
+        # Add a new track
+        tracker['tracks'].addTrack()
+        track_index = tracker['tracks'].getNumTracks() - 1
+        
+        # Set track name
+        tracker['tracks'][track_index]['name'].setValue(track_name)
+        
+        # Set track data for each frame
+        for frame in range(num_frames):
+            if visibility[frame, point_id]:
+                x = float(coords[frame, point_id, 0])
+                y = float(coords[frame, point_id, 1])
+                
+                # Set keyframes for track position
+                tracker['tracks'][track_index]['track_x'].setValueAt(x, frame)
+                tracker['tracks'][track_index]['track_y'].setValueAt(y, frame)
+                
+                # Enable the track for this frame
+                tracker['tracks'][track_index]['enable'].setValueAt(1.0, frame)
+            else:
+                # Disable track for invisible frames
+                tracker['tracks'][track_index]['enable'].setValueAt(0.0, frame)
+    
+    # Set reference frame to middle frame
+    reference_frame = num_frames // 2
+    tracker['reference_frame'].setValue(reference_frame)
+    
+    print(f"Tracker created successfully with {{num_points}} tracks")
+    print(f"Reference frame set to: {{reference_frame}}")
+    
+    return tracker
+
+def main():
+    """Main function to create and save the tracker."""
+    try:
+        # Create the tracker
+        tracker = create_tracker_with_data()
+        
+        # Save the script
+        output_file = "{output_path}"
+        nuke.scriptSaveAs(output_file)
+        print(f"Nuke script saved to: {{output_file}}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error creating tracker: {{e}}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+if __name__ == "__main__":
+    success = main()
+    if success:
+        print("✅ Nuke tracker export completed successfully!")
+    else:
+        print("❌ Nuke tracker export failed!")
+        import sys
+        sys.exit(1)
+'''
+    
+    def _generate_nuke_tracker_node(self, coords, visibility, num_frames, num_points) -> str:
+        """Generate the Nuke Tracker4 node content."""
+        
+        # Nuke script header
+        nuke_script = '''#! C:/Program Files/Nuke16.0v5/nuke-16.0.5.dll -nx
+version 16.0 v5
+Root {
+ inputs 0
+ name "CoTracker_Export.nk"
+ format "1920 1080 0 0 1920 1080 1 HD_1080"
+ proxy_type scale
+ proxy_format "960 540 0 0 960 540 1 HD_540"
+ colorManagement Nuke
+ workingSpaceLUT linear
+ monitorLut sRGB
+ int8Lut sRGB
+ int16Lut sRGB
+ logLut Cineon
+ floatLut linear
+}
+'''
+        
+        # Start Tracker4 node with exact structure from working example
+        nuke_script += "Tracker4 {\n"
+        nuke_script += " inputs 0\n"
+        nuke_script += " grablink_error_above 0.01\n"
+        nuke_script += f" tracks {{ {{ 1 31 {num_points} }} \n"
+        
+        # Track column definitions (exact copy from working example)
+        nuke_script += "{ { 5 1 20 enable e 1 } \n"
+        nuke_script += "{ 3 1 75 name name 1 } \n"
+        nuke_script += "{ 2 1 58 track_x track_x 1 } \n"
+        nuke_script += "{ 2 1 58 track_y track_y 1 } \n"
+        nuke_script += "{ 2 1 63 offset_x offset_x 1 } \n"
+        nuke_script += "{ 2 1 63 offset_y offset_y 1 } \n"
+        nuke_script += "{ 4 1 27 T T 1 } \n"
+        nuke_script += "{ 4 1 27 R R 1 } \n"
+        nuke_script += "{ 4 1 27 S S 1 } \n"
+        nuke_script += "{ 2 0 45 error error 1 } \n"
+        nuke_script += "{ 1 1 0 error_min error_min 1 } \n"
+        nuke_script += "{ 1 1 0 error_max error_max 1 } \n"
+        nuke_script += "{ 1 1 0 pattern_x pattern_x 1 } \n"
+        nuke_script += "{ 1 1 0 pattern_y pattern_y 1 } \n"
+        nuke_script += "{ 1 1 0 pattern_r pattern_r 1 } \n"
+        nuke_script += "{ 1 1 0 pattern_t pattern_t 1 } \n"
+        nuke_script += "{ 1 1 0 search_x search_x 1 } \n"
+        nuke_script += "{ 1 1 0 search_y search_y 1 } \n"
+        nuke_script += "{ 1 1 0 search_r search_r 1 } \n"
+        nuke_script += "{ 1 1 0 search_t search_t 1 } \n"
+        nuke_script += "{ 2 1 0 key_track key_track 1 } \n"
+        nuke_script += "{ 2 1 0 key_search_x key_search_x 1 } \n"
+        nuke_script += "{ 2 1 0 key_search_y key_search_y 1 } \n"
+        nuke_script += "{ 2 1 0 key_search_r key_search_r 1 } \n"
+        nuke_script += "{ 2 1 0 key_search_t key_search_t 1 } \n"
+        nuke_script += "{ 2 1 0 key_track_x key_track_x 1 } \n"
+        nuke_script += "{ 2 1 0 key_track_y key_track_y 1 } \n"
+        nuke_script += "{ 2 1 0 key_track_r key_track_r 1 } \n"
+        nuke_script += "{ 2 1 0 key_track_t key_track_t 1 } \n"
+        nuke_script += "{ 2 1 0 key_centre_offset_x key_centre_offset_x 1 } \n"
+        nuke_script += "{ 2 1 0 key_centre_offset_y key_centre_offset_y 1 } \n"
+        nuke_script += "} \n"  # Close column definitions
+        nuke_script += "{ \n"  # Open track data section
+        
+        # Generate track data for each point
+        for point_id in range(num_points):
+            track_name = f"track_{point_id + 1}"
+            
+            # Extract coordinates for this point across all frames
+            x_coords = []
+            y_coords = []
+            
+            for frame in range(num_frames):
+                if visibility[frame, point_id]:  # Only include visible points
+                    x_coords.append(f"{coords[frame, point_id, 0]:.6f}")
+                    y_coords.append(f"{coords[frame, point_id, 1]:.6f}")
+                else:
+                    # For invisible points, use the last known position or interpolate
+                    if x_coords:  # If we have previous coordinates
+                        x_coords.append(x_coords[-1])
+                        y_coords.append(y_coords[-1])
+                    else:  # If this is the first frame and it's invisible, use 0,0
+                        x_coords.append("0.0")
+                        y_coords.append("0.0")
+            
+            # Create curve data (starting from frame 0, not 1001 like the example)
+            x_curve = f"{{curve x0 {' '.join(x_coords)}}}"
+            y_curve = f"{{curve x0 {' '.join(y_coords)}}}"
+            
+            # Generate error curve (simplified)
+            error_values = " ".join(["0.0001"] * num_frames)
+            
+            # Generate track entry matching exact format from working example
+            track_entry = f'''{{ 
+ {{ {{curve K x{num_frames-1} 1}} "{track_name}" {x_curve} {y_curve} {{curve K x{num_frames-1} 0}} {{curve K x{num_frames-1} 0}} 1 1 1 {{curve x0 {error_values}}} 0 0.0001 -16 -16 16 16 -11 -11 11 11 {{curve}} {{curve x{num_frames-1} {coords[0, point_id, 0]:.0f}}} {{curve x{num_frames-1} {coords[0, point_id, 1]:.0f}}} {{curve x{num_frames-1} {coords[0, point_id, 0]+52:.0f}}} {{curve x{num_frames-1} {coords[0, point_id, 1]+52:.0f}}} {{curve x{num_frames-1} {coords[0, point_id, 0]+12:.0f}}} {{curve x{num_frames-1} {coords[0, point_id, 1]+12:.0f}}} {{curve x{num_frames-1} {coords[0, point_id, 0]+42:.0f}}} {{curve x{num_frames-1} {coords[0, point_id, 1]+42:.0f}}} {{curve x{num_frames-1} 15}} {{curve x{num_frames-1} 15}}  }} 
+'''
+            nuke_script += track_entry
+        
+        # Close tracks section properly
+        nuke_script += "} \n"  # Close tracks array
+        nuke_script += "}\n"   # Close tracks block
+        
+        # Add reference frame and other properties
+        nuke_script += f"reference_frame {num_frames // 2}\n"  # Use middle frame as reference
+        
+        # Add transform data (simplified - all zeros for now)
+        nuke_script += f"translate {{{{curve x0 {' '.join(['0'] * num_frames)}}}}} {{{{curve x0 {' '.join(['0'] * num_frames)}}}}}\n"
+        nuke_script += f"rotate {{{{curve x0 {' '.join(['0'] * num_frames)}}}}}\n"
+        nuke_script += f"scale {{{{curve x0 {' '.join(['1'] * num_frames)}}}}}\n"
+        
+        # Add center point (use image center as default)
+        center_x = "960"  # Half of 1920
+        center_y = "540"  # Half of 1080
+        nuke_script += f"center {{{{curve x0 {' '.join([center_x] * num_frames)}}}}} {{{{curve x0 {' '.join([center_y] * num_frames)}}}}}\n"
+        
+        # Add selected tracks and node properties
+        selected_tracks = ",".join([str(i) for i in range(num_points)])
+        nuke_script += f"selected_tracks {selected_tracks}\n"
+        nuke_script += "name CoTracker_Export\n"
+        nuke_script += "selected true\n"
+        nuke_script += "xpos 0\n"
+        nuke_script += "ypos 0\n"
+        nuke_script += "}\n"
+        
+        return nuke_script
+    
     def extract_mask_from_edited_image(self, original: np.ndarray, edited: np.ndarray) -> np.ndarray:
         """Extract a black and white mask from the difference between original and edited images."""
         # Handle RGBA to RGB conversion if needed
@@ -843,7 +1281,7 @@ class CoTrackerNukeApp:
     
     def export_all_tracks_to_nuke(self, tracks: torch.Tensor, visibility: torch.Tensor,
                                  output_path: str, video_info: Dict) -> str:
-        """Export tracking data to Nuke-compatible format."""
+        """Export tracking data to Nuke-compatible format using Tracker4 node."""
         
         tracks_np = tracks[0].cpu().numpy()  # (T, N, 2)
         visibility_np = visibility[0].cpu().numpy()  # (T, N) or (T, N, 1)
@@ -855,20 +1293,18 @@ class CoTrackerNukeApp:
         T, N, _ = tracks_np.shape
         
         # Use all tracks (limit to reasonable number for Nuke)
-        max_tracks = min(N, 20)  # Limit to 20 tracks for manageable Nuke file
+        max_tracks = min(N, 50)  # Increased limit for more comprehensive tracking
         all_tracks = tracks_np[:, :max_tracks, :]  # (T, max_tracks, 2)
         all_visibility = visibility_np[:, :max_tracks]  # (T, max_tracks)
         
-        # Generate Nuke script
-        nuke_script = self._generate_nuke_script(
-            all_tracks, all_visibility, video_info
-        )
+        # Prepare tracking data in the format expected by export_to_nuke
+        tracking_data = {
+            'coords': all_tracks,  # (T, max_tracks, 2)
+            'visibility': all_visibility  # (T, max_tracks)
+        }
         
-        # Save to file
-        with open(output_path, 'w') as f:
-            f.write(nuke_script)
-        
-        return nuke_script
+        # Use the new comprehensive Nuke export method
+        return self.export_to_nuke(tracking_data, output_path)
     
     def _generate_nuke_script(self, tracks: np.ndarray, visibility: np.ndarray, 
                             video_info: Dict) -> str:

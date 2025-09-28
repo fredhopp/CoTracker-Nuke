@@ -192,7 +192,7 @@ class CoTrackerNukeApp:
         max_preview_points = preview_points_per_axis * preview_points_per_axis
         
         # Select preview points (same logic as in _create_preview_video)
-        selected_point_indices = self._select_preview_points(tracks_np, visibility_np, max_preview_points)
+        selected_point_indices = self._select_preview_points(tracks_np, visibility_np, max_preview_points, reference_frame)
         
         preview_coords_file = self.debug_dir / f"preview_grid_coords_{timestamp}.json"
         preview_data = {
@@ -239,19 +239,19 @@ class CoTrackerNukeApp:
         # Export CSV files for easier analysis
         self._export_coordinates_csv(tracks_np, visibility_np, selected_point_indices, timestamp, reference_frame)
     
-    def _select_preview_points(self, tracks_np: np.ndarray, visibility_np: np.ndarray, max_points: int) -> List[int]:
+    def _select_preview_points(self, tracks_np: np.ndarray, visibility_np: np.ndarray, max_points: int, reference_frame: int = 0) -> List[int]:
         """Select preview points using the same logic as the preview video."""
         total_points = tracks_np.shape[1]
         
         if total_points <= max_points:
             return list(range(total_points))
         
-        # Use first frame to select points with good spatial distribution
-        first_frame_tracks = tracks_np[0]  # (N, 2)
-        first_frame_visibility = visibility_np[0]  # (N,)
+        # Use reference frame to select points with good spatial distribution
+        ref_frame_tracks = tracks_np[reference_frame]  # (N, 2)
+        ref_frame_visibility = visibility_np[reference_frame]  # (N,)
         
-        # Get initially visible points
-        visible_mask = first_frame_visibility > 0.5
+        # Get points visible at reference frame
+        visible_mask = ref_frame_visibility > 0.5
         visible_indices = np.where(visible_mask)[0]
         
         if len(visible_indices) <= max_points:
@@ -873,7 +873,7 @@ def create_gradio_interface():
             
             # Create preview video with tracked points (try both methods)
             try:
-                preview_video = app._create_preview_video(video, tracks, visibility, max_preview_points)
+                preview_video = app._create_preview_video(video, tracks, visibility, max_preview_points, app.reference_frame)
             except Exception as e:
                 print(f"Video preview failed, trying image sequence: {e}")
                 preview_video = app._create_preview_image_sequence(video, tracks, visibility)
@@ -1031,7 +1031,7 @@ Note: All coordinate data includes visibility confidence and reference frame mar
 
 # Add preview video creation method to the class
 def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor, 
-                         visibility: torch.Tensor, max_preview_points: int = 75) -> str:
+                         visibility: torch.Tensor, max_preview_points: int = 75, reference_frame: int = 0) -> str:
     """Create preview video showing tracked points over time."""
     import tempfile
     import os
@@ -1049,19 +1049,20 @@ def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor,
     total_points = tracks_np.shape[1]
     max_points_to_show = min(total_points, max_preview_points)
     
-    # Use first frame to select points with good spatial distribution
-    first_frame_tracks = tracks_np[0]  # (N, 2)
-    first_frame_visibility = visibility_np[0]  # (N,)
+    # Use reference frame to select points with good spatial distribution
+    # This ensures we select points that are visible at the reference frame
+    ref_frame_tracks = tracks_np[reference_frame]  # (N, 2)
+    ref_frame_visibility = visibility_np[reference_frame]  # (N,)
     
-    # Get initially visible points
-    visible_mask = first_frame_visibility > 0.5
+    # Get points visible at reference frame
+    visible_mask = ref_frame_visibility > 0.5
     visible_indices = np.where(visible_mask)[0]
     
     if len(visible_indices) <= max_points_to_show:
         selected_point_indices = visible_indices.tolist()
     else:
         # Implement proper 2D grid sampling to ensure even distribution
-        visible_tracks = first_frame_tracks[visible_indices]
+        visible_tracks = ref_frame_tracks[visible_indices]
         
         # Find the grid structure
         x_coords = visible_tracks[:, 0]
@@ -1139,12 +1140,12 @@ def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor,
     
     # Verify the distribution of selected points
     if len(selected_point_indices) > 0:
-        selected_tracks_frame0 = first_frame_tracks[selected_point_indices]
-        sel_x = np.round(selected_tracks_frame0[:, 0]).astype(int)
-        sel_y = np.round(selected_tracks_frame0[:, 1]).astype(int)
+        selected_tracks_ref = ref_frame_tracks[selected_point_indices]
+        sel_x = np.round(selected_tracks_ref[:, 0]).astype(int)
+        sel_y = np.round(selected_tracks_ref[:, 1]).astype(int)
         sel_unique_x = len(np.unique(sel_x))
         sel_unique_y = len(np.unique(sel_y))
-        print(f"Selected grid distribution: {sel_unique_x} columns x {sel_unique_y} rows")
+        print(f"Selected grid distribution at reference frame {reference_frame}: {sel_unique_x} columns x {sel_unique_y} rows")
         print(f"Total available points: {total_points}")
     
     # Create frames with tracking overlays

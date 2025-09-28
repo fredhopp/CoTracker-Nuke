@@ -13,6 +13,12 @@
 - Activate with `.venv\Scripts\activate` (Windows) or `source .venv/bin/activate` (Unix)
 - Always install packages using `pip install` within the activated virtual environment
 
+### Model Selection
+- **ALWAYS use CoTracker3 offline model only**
+- The offline model behaves much better than the online model
+- Provides superior temporal consistency and no sliding window artifacts
+- Eliminates repeating animation cycles and frame synchronization issues
+
 ### General Development
 - Follow these rules consistently throughout the project
 - Reference this file when making environment or git-related decisions

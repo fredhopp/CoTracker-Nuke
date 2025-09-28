@@ -466,7 +466,7 @@ def create_gradio_interface():
     
     app = CoTrackerNukeApp()
     
-    def process_video(video_file, grid_size, preview_points):
+    def process_video(video_file, grid_size, preview_downsample):
         """Process video and return tracking results."""
         if video_file is None:
             return "Please upload a video file.", None, None
@@ -480,9 +480,15 @@ def create_gradio_interface():
             tracks, visibility = app.track_points(video, grid_size)
             app.tracking_results = (tracks, visibility)
             
+            # Calculate preview points from downsampling ratio
+            # If grid_size=50 and downsample=4, show every 4th point -> 50/4 = ~12 points per axis
+            preview_points_per_axis = max(1, grid_size // preview_downsample)
+            # For square grids, this gives us preview_points_per_axis² total points
+            max_preview_points = preview_points_per_axis * preview_points_per_axis
+            
             # Create preview video with tracked points (try both methods)
             try:
-                preview_video = app._create_preview_video(video, tracks, visibility, preview_points)
+                preview_video = app._create_preview_video(video, tracks, visibility, max_preview_points)
             except Exception as e:
                 print(f"Video preview failed, trying image sequence: {e}")
                 preview_video = app._create_preview_image_sequence(video, tracks, visibility)
@@ -492,6 +498,7 @@ Tracking completed successfully!
 - Video shape: {video.shape}
 - Video frames: {video.shape[0]} (input)
 - Total tracked points: {tracks.shape[2]}
+- Preview downsampling: 1/{preview_downsample} (showing ~{max_preview_points} points)
 - Processing device: {app.device}
 - CoTracker frames: {tracks.shape[1]} (internal processing)
 - Note: CoTracker3 generates more frames for temporal precision
@@ -543,12 +550,13 @@ Tracking completed successfully!
                     file_types=[".mp4", ".mov", ".avi", ".mkv"]
                 )
                 grid_size = gr.Slider(
-                    minimum=5, maximum=50, value=10, step=1,
+                    minimum=5, maximum=70, value=10, step=1,
                     label="Grid Size (number of points to track)"
                 )
-                preview_points = gr.Slider(
-                    minimum=10, maximum=500, value=150, step=10,
-                    label="Preview Points (number of points to show in preview)"
+                preview_downsample = gr.Dropdown(
+                    choices=[("1/10 (every 10th point)", 10), ("1/8 (every 8th point)", 8), ("1/6 (every 6th point)", 6), ("1/4 (every 4th point)", 4), ("1/3 (every 3rd point)", 3), ("1/2 (every 2nd point)", 2), ("1/1 (all points)", 1)],
+                    value=4,
+                    label="Preview Downsample (ratio of Grid Size to show)"
                 )
                 process_btn = gr.Button("Process Video", variant="primary")
                 
@@ -576,7 +584,7 @@ Tracking completed successfully!
         # Event handlers
         process_btn.click(
             fn=process_video,
-            inputs=[video_input, grid_size, preview_points],
+            inputs=[video_input, grid_size, preview_downsample],
             outputs=[result_text, preview_video]
         )
         
@@ -620,14 +628,92 @@ def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor,
     if len(visible_indices) <= max_points_to_show:
         selected_point_indices = visible_indices.tolist()
     else:
-        # For grid patterns, use regular sampling to maintain grid structure
-        # Sample every Nth point to get an even distribution across the grid
-        step_size = len(visible_indices) / max_points_to_show
-        selected_point_indices = [visible_indices[int(i * step_size)] for i in range(max_points_to_show)]
+        # Implement proper 2D grid sampling to ensure even distribution
+        visible_tracks = first_frame_tracks[visible_indices]
+        
+        # Find the grid structure
+        x_coords = visible_tracks[:, 0]
+        y_coords = visible_tracks[:, 1]
+        
+        # Round to find unique grid positions
+        x_rounded = np.round(x_coords).astype(int)
+        y_rounded = np.round(y_coords).astype(int)
+        
+        unique_x = np.unique(x_rounded)
+        unique_y = np.unique(y_rounded)
+        
+        grid_width = len(unique_x)
+        grid_height = len(unique_y)
+        
+        # Calculate target grid dimensions for sampling
+        # Maintain aspect ratio while getting close to max_points_to_show
+        aspect_ratio = grid_width / grid_height
+        target_points_sqrt = np.sqrt(max_points_to_show)
+        
+        if aspect_ratio >= 1.0:  # Wider than tall
+            target_width = int(target_points_sqrt * np.sqrt(aspect_ratio))
+            target_height = int(target_points_sqrt / np.sqrt(aspect_ratio))
+        else:  # Taller than wide
+            target_width = int(target_points_sqrt / np.sqrt(1/aspect_ratio))
+            target_height = int(target_points_sqrt * np.sqrt(1/aspect_ratio))
+        
+        # Ensure we don't exceed grid dimensions
+        target_width = min(target_width, grid_width)
+        target_height = min(target_height, grid_height)
+        
+        print(f"Grid sampling: {grid_width}x{grid_height} -> {target_width}x{target_height} ({target_width*target_height} points)")
+        
+        # Sample grid positions evenly, ensuring we include edges
+        if target_width == 1:
+            selected_x_indices = [grid_width // 2]  # Center point
+        elif target_width >= grid_width:
+            selected_x_indices = list(range(grid_width))  # All points
+        else:
+            # Use linspace-like distribution to include first and last
+            selected_x_indices = [int(i * (grid_width - 1) / (target_width - 1)) for i in range(target_width)]
+        
+        if target_height == 1:
+            selected_y_indices = [grid_height // 2]  # Center point
+        elif target_height >= grid_height:
+            selected_y_indices = list(range(grid_height))  # All points
+        else:
+            # Use linspace-like distribution to include first and last
+            selected_y_indices = [int(i * (grid_height - 1) / (target_height - 1)) for i in range(target_height)]
+        
+        # Find points that match the selected grid positions
+        selected_point_indices = []
+        for x_idx in selected_x_indices:
+            target_x = unique_x[x_idx]
+            for y_idx in selected_y_indices:
+                target_y = unique_y[y_idx]
+                
+                # Find the point closest to this grid position
+                distances = np.sqrt((x_rounded - target_x)**2 + (y_rounded - target_y)**2)
+                closest_idx = np.argmin(distances)
+                original_idx = visible_indices[closest_idx]
+                
+                if original_idx not in selected_point_indices:
+                    selected_point_indices.append(original_idx)
+        
+        # If we didn't get enough points, fill with remaining points
+        if len(selected_point_indices) < max_points_to_show:
+            remaining_indices = [idx for idx in visible_indices if idx not in selected_point_indices]
+            needed = max_points_to_show - len(selected_point_indices)
+            step = max(1, len(remaining_indices) // needed)
+            additional_indices = remaining_indices[::step][:needed]
+            selected_point_indices.extend(additional_indices)
     
     print(f"Selected {len(selected_point_indices)} consistent points for tracking across all frames")
-    print(f"First few selected points: {selected_point_indices[:5]}")
-    print(f"Total available points: {total_points}")
+    
+    # Verify the distribution of selected points
+    if len(selected_point_indices) > 0:
+        selected_tracks_frame0 = first_frame_tracks[selected_point_indices]
+        sel_x = np.round(selected_tracks_frame0[:, 0]).astype(int)
+        sel_y = np.round(selected_tracks_frame0[:, 1]).astype(int)
+        sel_unique_x = len(np.unique(sel_x))
+        sel_unique_y = len(np.unique(sel_y))
+        print(f"Selected grid distribution: {sel_unique_x} columns x {sel_unique_y} rows")
+        print(f"Total available points: {total_points}")
     
     # Create frames with tracking overlays
     preview_frames = []
@@ -704,12 +790,12 @@ def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor,
                         cv2.circle(frame, (x, y), 4, color, -1)
                         cv2.circle(frame, (x, y), 6, (255, 255, 255), 1)  # White outline
                         
-                        # Add point number for visible points (up to 30 for better visibility)
-                        if idx_pos < min(30, len(selected_point_indices)):  # Show numbers for up to 30 points
+                        # Add point number for visible points (up to 50 for better grid visualization)
+                        if idx_pos < min(50, len(selected_point_indices)):  # Show numbers for up to 50 points
                             cv2.putText(frame, str(idx_pos + 1), (x+8, y-8), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 2)
                             cv2.putText(frame, str(idx_pos + 1), (x+8, y-8), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)  # Black outline
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)  # Black outline
                         
                         points_drawn += 1
             

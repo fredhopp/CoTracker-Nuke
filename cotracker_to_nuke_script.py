@@ -62,15 +62,16 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
                 visible = parts[4].lower() == 'true'
                 confidence = float(parts[5])
                 
-                # Filter based on visibility and confidence
-                if not visible or confidence < min_confidence:
-                    filtered_rows += 1
-                    continue
-                
-                # Group by point_id
+                # Initialize point if not exists (keep ALL points)
                 if point_id not in tracker_dict:
                     tracker_dict[point_id] = []
                 
+                # Filter based on visibility and confidence (skip only individual keyframes)
+                if not visible or confidence < min_confidence:
+                    filtered_rows += 1
+                    continue  # Skip this keyframe but keep the point
+                
+                # Add valid keyframe to the point
                 tracker_dict[point_id].append([frame, x, y])
         
         if not tracker_dict:

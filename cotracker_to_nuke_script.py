@@ -13,7 +13,7 @@ Usage in Nuke:
 import nuke
 import time
 
-def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=False, enable_s=False, image_height=1080):
+def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=False, enable_s=False, image_height=1080, min_confidence=0.5):
     """
     Create Nuke Tracker4 node from CoTracker CSV data.
     
@@ -24,6 +24,7 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
         enable_r: Enable rotate tracking  
         enable_s: Enable scale tracking
         image_height: Image height for coordinate conversion (default 1080)
+        min_confidence: Minimum confidence threshold for keyframes (default 0.5)
     """
     
     try:
@@ -33,8 +34,10 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
             nuke.message('Invalid CSV file! Please select a CoTracker CSV file.')
             return
         
-        # Read and parse CSV data
+        # Read and parse CSV data with filtering
         tracker_dict = {}
+        total_rows = 0
+        filtered_rows = 0
         
         with open(csv_path, "r") as csv_file:
             # Skip header line
@@ -48,17 +51,20 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
                     
                 # Parse CSV: frame,point_id,x,y,visible,confidence,is_reference_frame
                 parts = line.split(',')
-                if len(parts) < 4:
+                if len(parts) < 6:  # Need at least frame,point_id,x,y,visible,confidence
                     continue
                     
+                total_rows += 1
                 frame = int(parts[0])
                 point_id = int(parts[1])
                 x = float(parts[2])
                 y = float(parts[3])
-                visible = parts[4].lower() == 'true' if len(parts) > 4 else True
+                visible = parts[4].lower() == 'true'
+                confidence = float(parts[5])
                 
-                # Only include visible points
-                if not visible:
+                # Filter based on visibility and confidence
+                if not visible or confidence < min_confidence:
+                    filtered_rows += 1
                     continue
                 
                 # Group by point_id
@@ -71,9 +77,13 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
             nuke.message('No valid tracking data found in CSV file!')
             return
         
-        print(f"Loaded {len(tracker_dict)} tracks")
+        print(f"CSV Processing:")
+        print(f"  Total rows: {total_rows}")
+        print(f"  Filtered out: {filtered_rows} (invisible or confidence < {min_confidence})")
+        print(f"  Valid keyframes: {total_rows - filtered_rows}")
+        print(f"  Tracking points: {len(tracker_dict)}")
         for point_id, data in tracker_dict.items():
-            print(f"  Track {point_id}: {len(data)} keyframes")
+            print(f"    Track {point_id}: {len(data)} keyframes")
         
         # Create Tracker4 node
         print("Creating Tracker4 node...")
@@ -165,13 +175,15 @@ if __name__ == "__main__":
     enable_r = False     # Enable rotate tracking
     enable_s = False     # Enable scale tracking
     image_height = 1080  # Image height for coordinate conversion (CoTracker top-left -> Nuke bottom-left)
+    min_confidence = 0.5 # Minimum confidence threshold (0.0-1.0, filters out unreliable tracks)
     
     print("CoTracker CSV to Nuke Tracker Import")
     print("=" * 40)
     print(f"CSV File: {csv_path}")
     print(f"Settings: T={enable_t}, R={enable_r}, S={enable_s}")
     print(f"Time Offset: {time_offset}")
+    print(f"Min Confidence: {min_confidence}")
     print()
     
     # Run the import
-    cotracker_to_nuke_tracker(csv_path, time_offset, enable_t, enable_r, enable_s, image_height)
+    cotracker_to_nuke_tracker(csv_path, time_offset, enable_t, enable_r, enable_s, image_height, min_confidence)

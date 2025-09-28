@@ -46,32 +46,67 @@ class CoTrackerNukeApp:
         """Load CoTracker model from torch hub."""
         try:
             print(f"Loading CoTracker model on {self.device}...")
-            # Try CoTracker3 offline first for better temporal consistency
+            # Use CoTracker2 for better compatibility with custom queries
+            # CoTracker3 offline doesn't properly support the queries parameter
             try:
                 self.cotracker_model = torch.hub.load(
                     "facebookresearch/co-tracker", 
-                    "cotracker3_offline"
+                    "cotracker2"
                 ).to(self.device)
-                print("CoTracker3 offline model loaded successfully")
+                print("CoTracker2 model loaded successfully (best for custom reference frames)")
             except Exception as e:
-                print(f"CoTracker3 offline not available, trying online: {e}")
+                print(f"CoTracker2 not available, trying CoTracker3 offline: {e}")
                 try:
+                    self.cotracker_model = torch.hub.load(
+                        "facebookresearch/co-tracker", 
+                        "cotracker3_offline"
+                    ).to(self.device)
+                    print("CoTracker3 offline model loaded successfully")
+                except Exception as e2:
+                    print(f"CoTracker3 offline not available, trying online: {e2}")
                     self.cotracker_model = torch.hub.load(
                         "facebookresearch/co-tracker", 
                         "cotracker3_online"
                     ).to(self.device)
                     print("CoTracker3 online model loaded successfully")
-                except Exception as e2:
-                    print(f"CoTracker3 online not available, trying CoTracker2: {e2}")
-                    self.cotracker_model = torch.hub.load(
-                        "facebookresearch/co-tracker", 
-                        "cotracker2"
-                    ).to(self.device)
-                    print("CoTracker2 model loaded successfully")
                 
         except Exception as e:
             print(f"Error loading CoTracker model: {e}")
             raise
+    
+    def _generate_grid_queries(self, video: np.ndarray, grid_size: int, reference_frame: int) -> torch.Tensor:
+        """Generate grid query points for a specific reference frame."""
+        import torch
+        
+        # Ensure reference frame is within bounds
+        reference_frame = max(0, min(reference_frame, video.shape[0] - 1))
+        
+        # Get video dimensions
+        height, width = video.shape[1], video.shape[2]
+        
+        # Create grid points on the reference frame
+        # Calculate step sizes for even distribution
+        x_step = width / (grid_size - 1) if grid_size > 1 else width / 2
+        y_step = height / (grid_size - 1) if grid_size > 1 else height / 2
+        
+        queries = []
+        for i in range(grid_size):
+            for j in range(grid_size):
+                x = int(j * x_step) if grid_size > 1 else width // 2
+                y = int(i * y_step) if grid_size > 1 else height // 2
+                
+                # Ensure coordinates are within bounds
+                x = max(0, min(x, width - 1))
+                y = max(0, min(y, height - 1))
+                
+                # Add query: [frame_index, x, y]
+                queries.append([reference_frame, x, y])
+        
+        # Convert to tensor format expected by CoTracker
+        queries_tensor = torch.tensor(queries, dtype=torch.float32, device=self.device)
+        print(f"Generated {len(queries)} query points on frame {reference_frame}")
+        
+        return queries_tensor
     
     def load_video(self, video_path: str) -> np.ndarray:
         """Load video file and return as numpy array."""
@@ -113,7 +148,7 @@ class CoTrackerNukeApp:
                     print(f"All video loading methods failed: {e3}")
                     raise
     
-    def track_points(self, video: np.ndarray, grid_size: int = 10) -> Tuple[torch.Tensor, torch.Tensor]:
+    def track_points(self, video: np.ndarray, grid_size: int = 10, reference_frame: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
         """Track points in video using CoTracker."""
         if self.cotracker_model is None:
             self.load_cotracker_model()
@@ -175,10 +210,20 @@ class CoTrackerNukeApp:
                 # CoTracker2 or offline model
                 print("Using CoTracker2/offline API")
                 with torch.no_grad():
-                    pred_tracks, pred_visibility = self.cotracker_model(
-                        video_tensor, 
-                        grid_size=grid_size
-                    )
+                    if reference_frame == 0:
+                        # Use automatic grid on first frame
+                        pred_tracks, pred_visibility = self.cotracker_model(
+                            video_tensor, 
+                            grid_size=grid_size
+                        )
+                    else:
+                        # Use custom queries with specified reference frame
+                        print(f"Using custom reference frame: {reference_frame}")
+                        queries = self._generate_grid_queries(video, grid_size, reference_frame)
+                        pred_tracks, pred_visibility = self.cotracker_model(
+                            video_tensor, 
+                            queries=queries
+                        )
             
             print(f"Tracking completed. Tracks shape: {pred_tracks.shape}")
             return pred_tracks, pred_visibility
@@ -465,19 +510,79 @@ def create_gradio_interface():
     """Create Gradio interface for the application."""
     
     app = CoTrackerNukeApp()
+    app.reference_frame = 0  # Default to frame 0
     
-    def process_video(video_file, grid_size, preview_downsample):
-        """Process video and return tracking results."""
-        if video_file is None:
-            return "Please upload a video file.", None, None
+    def load_video_for_reference(reference_video):
+        """Load video and display it for reference frame selection."""
+        if reference_video is None:
+            return None, "Please upload a video file first."
         
         try:
-            # Load video
-            video = app.load_video(video_file.name)
+            video = app.load_video(reference_video)
             app.current_video = video
             
-            # Track points
-            tracks, visibility = app.track_points(video, grid_size)
+            # Create a simple preview video for reference frame selection
+            import tempfile
+            import os
+            temp_dir = tempfile.gettempdir()
+            temp_video_path = os.path.join(temp_dir, f"reference_video_{os.getpid()}.mp4")
+            
+            # Save the full video for reference frame selection
+            preview_frames = video  # Use full video for reference frame selection
+            
+            import imageio.v3 as iio
+            iio.imwrite(
+                temp_video_path, 
+                preview_frames, 
+                plugin="FFMPEG", 
+                fps=24,
+                codec='libx264',
+                quality=8
+            )
+            
+            return temp_video_path, f"Video loaded: {video.shape[0]} frames available"
+            
+        except Exception as e:
+            return None, f"Error loading video: {str(e)}"
+    
+    def select_reference_frame(reference_video, video_data):
+        """Select the current frame as reference frame."""
+        if reference_video is None or app.current_video is None:
+            return "Please load a video first."
+        
+        try:
+            # Extract current time from video data
+            # video_data is a tuple: (video_path, current_time)
+            if isinstance(video_data, tuple) and len(video_data) >= 2:
+                current_time = video_data[1]
+            else:
+                # Fallback: assume middle of video
+                current_time = app.current_video.shape[0] / 2 / 24  # Convert frames to seconds at 24fps
+            
+            # Convert time to frame index (assuming 24fps)
+            fps = 24
+            frame_idx = int(current_time * fps)
+            frame_idx = max(0, min(frame_idx, app.current_video.shape[0] - 1))
+            
+            app.reference_frame = frame_idx
+            
+            return f"Reference frame set to: Frame {frame_idx} (time: {current_time:.2f}s)"
+            
+        except Exception as e:
+            return f"Error selecting reference frame: {str(e)}"
+    
+    def process_video(reference_video, grid_size, preview_downsample):
+        """Process video and return tracking results."""
+        if reference_video is None:
+            return "Please upload a video file.", None
+        
+        try:
+            # Load video (reference_video is now the direct video file)
+            video = app.load_video(reference_video)
+            app.current_video = video
+            
+            # Track points with reference frame
+            tracks, visibility = app.track_points(video, grid_size, app.reference_frame)
             app.tracking_results = (tracks, visibility)
             
             # Calculate preview points from downsampling ratio
@@ -497,6 +602,7 @@ def create_gradio_interface():
 Tracking completed successfully!
 - Video shape: {video.shape}
 - Video frames: {video.shape[0]} (input)
+- Reference frame: {app.reference_frame}
 - Total tracked points: {tracks.shape[2]}
 - Preview downsampling: 1/{preview_downsample} (showing ~{max_preview_points} points)
 - Processing device: {app.device}
@@ -544,11 +650,27 @@ Tracking completed successfully!
         gr.Markdown("Upload a video, track points with CoTracker, and export tracking data for Nuke.")
         
         with gr.Row():
-            with gr.Column():
-                video_input = gr.File(
-                    label="Upload Video", 
-                    file_types=[".mp4", ".mov", ".avi", ".mkv"]
+            with gr.Column(scale=1):
+                # Primary video upload/reference selection (replaces redundant upload widget)
+                reference_video = gr.Video(
+                    label="Upload Video & Select Reference Frame", 
+                    interactive=True,
+                    sources=["upload"],  # Only allow file upload, no webcam
+                    height=300   # Half the default size
                 )
+                
+                # Reference frame selection controls
+                gr.Markdown("### Reference Frame Selection")
+                reference_frame_info = gr.Textbox(
+                    label="Reference Frame Info", 
+                    value="No reference frame selected (will use frame 0)",
+                    interactive=False,
+                    lines=2
+                )
+                select_reference_btn = gr.Button("Select Current Frame as Reference", variant="secondary")
+                
+                # Tracking parameters
+                gr.Markdown("### Tracking Parameters")
                 grid_size = gr.Slider(
                     minimum=5, maximum=70, value=10, step=1,
                     label="Grid Size (number of points to track)"
@@ -560,13 +682,19 @@ Tracking completed successfully!
                 )
                 process_btn = gr.Button("Process Video", variant="primary")
                 
-            with gr.Column():
+            with gr.Column(scale=1):
                 result_text = gr.Textbox(
                     label="Processing Results", 
-                    lines=10, 
+                    lines=15, 
                     interactive=False
                 )
-                preview_video = gr.Video(label="Tracking Preview")
+        
+        # Tracking preview moved below
+        gr.Markdown("## Tracking Results")
+        preview_video = gr.Video(
+            label="Tracking Preview",
+            height=400  # 2/3 the default size
+        )
         
         with gr.Row():
             output_filename = gr.Textbox(
@@ -582,12 +710,28 @@ Tracking completed successfully!
             )
         
         # Event handlers
+        # Load video for reference frame selection (now using reference_video directly)
+        reference_video.upload(
+            fn=load_video_for_reference,
+            inputs=[reference_video],
+            outputs=[reference_video, reference_frame_info]
+        )
+        
+        # Select reference frame
+        select_reference_btn.click(
+            fn=select_reference_frame,
+            inputs=[reference_video, reference_video],
+            outputs=[reference_frame_info]
+        )
+        
+        # Process video
         process_btn.click(
             fn=process_video,
-            inputs=[video_input, grid_size, preview_downsample],
+            inputs=[reference_video, grid_size, preview_downsample],
             outputs=[result_text, preview_video]
         )
         
+        # Export to Nuke
         export_btn.click(
             fn=export_nuke_file,
             inputs=[output_filename],

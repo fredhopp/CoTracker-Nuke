@@ -14,10 +14,10 @@
 - Always install packages using `pip install` within the activated virtual environment
 
 ### Model Selection
-- **ALWAYS use CoTracker3 offline model only**
-- The offline model behaves much better than the online model
-- Provides superior temporal consistency and no sliding window artifacts
-- Eliminates repeating animation cycles and frame synchronization issues
+- **Use CoTracker2 model for best compatibility with custom reference frames**
+- CoTracker3 offline doesn't properly support the queries parameter for custom reference frames
+- CoTracker2 provides reliable tracking with both automatic grid and custom query support
+- Falls back to CoTracker3 offline if CoTracker2 is not available
 
 ### General Development
 - Follow these rules consistently throughout the project

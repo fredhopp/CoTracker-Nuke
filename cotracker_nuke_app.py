@@ -32,6 +32,7 @@ from scipy.spatial.distance import pdist, squareform
 from scipy.optimize import linear_sum_assignment
 import logging
 from datetime import datetime
+from PIL import Image
 
 
 class CoTrackerNukeApp:
@@ -52,6 +53,10 @@ class CoTrackerNukeApp:
         # Set up logging
         if self.debug_mode:
             self.setup_logging()
+            
+        # Mask-related attributes
+        self.current_mask = None
+        self.reference_frame_image = None
     
     def setup_logging(self):
         """Set up logging for debug information."""
@@ -239,6 +244,129 @@ class CoTrackerNukeApp:
         # Export CSV files for easier analysis
         self._export_coordinates_csv(tracks_np, visibility_np, selected_point_indices, timestamp, reference_frame)
     
+    def get_reference_frame_image(self) -> Optional[np.ndarray]:
+        """Get the reference frame image for mask drawing."""
+        if self.current_video is None or self.reference_frame is None:
+            return None
+        
+        if self.reference_frame >= len(self.current_video):
+            return None
+            
+        frame = self.current_video[self.reference_frame]
+        self.reference_frame_image = frame.copy()
+        return frame
+    
+    def save_mask(self, mask: np.ndarray) -> str:
+        """Save the mask to a file and return the filename."""
+        if mask is None:
+            return ""
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        mask_filename = f"drawn_mask_{timestamp}.png"
+        mask_path = self.debug_dir / mask_filename
+        
+        # Convert to PIL Image and save
+        from PIL import Image
+        mask_image = Image.fromarray(mask.astype(np.uint8))
+        mask_image.save(mask_path)
+        
+        self.current_mask = mask
+        
+        if self.debug_mode:
+            self.logger.info(f"Mask saved to: {mask_path}")
+            self.logger.info(f"Mask shape: {mask.shape}, unique values: {np.unique(mask)}")
+        
+        return str(mask_path)
+    
+    def extract_mask_from_edited_image(self, original: np.ndarray, edited: np.ndarray) -> np.ndarray:
+        """Extract a black and white mask from the difference between original and edited images."""
+        # Handle RGBA to RGB conversion if needed
+        if edited.shape[-1] == 4:  # RGBA
+            edited_rgb = edited[:, :, :3]
+        else:
+            edited_rgb = edited
+        
+        if original.shape[-1] == 4:  # RGBA
+            original_rgb = original[:, :, :3]
+        else:
+            original_rgb = original
+            
+        # Calculate difference
+        diff = np.abs(edited_rgb.astype(np.float32) - original_rgb.astype(np.float32))
+        
+        # Sum across color channels
+        diff_sum = np.sum(diff, axis=2)
+        
+        # Create binary mask (white where there's a difference, black where there's no difference)
+        threshold = 10  # Adjust as needed
+        mask = (diff_sum > threshold).astype(np.uint8) * 255
+        
+        return mask
+    
+    def is_mask_empty(self, mask: np.ndarray) -> bool:
+        """Check if mask is empty (all black) or effectively empty."""
+        if mask is None:
+            return True
+        
+        # Count white pixels (value 255)
+        white_pixels = np.sum(mask == 255)
+        total_pixels = mask.shape[0] * mask.shape[1]
+        
+        # Consider mask empty if less than 1% of pixels are white
+        return (white_pixels / total_pixels) < 0.01
+    
+    def apply_mask_to_grid(self, queries: torch.Tensor, mask: np.ndarray) -> torch.Tensor:
+        """Filter grid queries based on mask. Only keep points in white areas."""
+        if mask is None or self.is_mask_empty(mask):
+            return queries  # Return original queries if no mask
+        
+        # Convert queries to numpy for processing
+        queries_np = queries.cpu().numpy()
+        
+        # Get image dimensions
+        H, W = mask.shape
+        
+        # Filter queries
+        filtered_queries = []
+        
+        for batch_idx in range(queries_np.shape[0]):
+            batch_queries = queries_np[batch_idx]  # Shape: (N, 3) - [t, x, y]
+            
+            valid_queries = []
+            for query in batch_queries:
+                t, x, y = query
+                
+                # Convert coordinates to mask indices
+                mask_x = int(x)
+                mask_y = int(y)
+                
+                # Check bounds
+                if 0 <= mask_x < W and 0 <= mask_y < H:
+                    # Check if point is in white area of mask
+                    if mask[mask_y, mask_x] == 255:  # White pixel
+                        valid_queries.append(query)
+            
+            if valid_queries:
+                filtered_queries.append(np.array(valid_queries))
+            else:
+                # If no valid queries, keep at least one (center point)
+                center_query = [batch_queries[0][0], W//2, H//2]  # [t, center_x, center_y]
+                filtered_queries.append(np.array([center_query]))
+        
+        # Convert back to tensor
+        if filtered_queries:
+            filtered_tensor = torch.tensor(filtered_queries, dtype=queries.dtype, device=queries.device)
+        else:
+            # Fallback to original if filtering failed
+            filtered_tensor = queries
+        
+        if self.debug_mode:
+            original_points = queries.shape[1] if len(queries.shape) > 1 else 0
+            filtered_points = filtered_tensor.shape[1] if len(filtered_tensor.shape) > 1 else 0
+            self.logger.info(f"Mask filtering: {original_points} → {filtered_points} points")
+        
+        return filtered_tensor
+
     def _select_preview_points(self, tracks_np: np.ndarray, visibility_np: np.ndarray, max_points: int, reference_frame: int = 0) -> List[int]:
         """Select preview points using the same logic as the preview video."""
         total_points = tracks_np.shape[1]
@@ -364,6 +492,11 @@ class CoTrackerNukeApp:
         # Convert to tensor format expected by CoTracker
         # CoTracker2 expects queries with shape [B, N, 3] where B=batch_size, N=num_queries, 3=(frame, x, y)
         queries_tensor = torch.tensor([queries], dtype=torch.float32, device=self.device)  # Add batch dimension
+        
+        # Apply mask filtering if mask is available
+        if self.current_mask is not None:
+            queries_tensor = self.apply_mask_to_grid(queries_tensor, self.current_mask)
+        
         print(f"Generated {len(queries)} query points on frame {reference_frame}")
         print(f"Query tensor shape: {queries_tensor.shape}")
         
@@ -847,13 +980,22 @@ def create_gradio_interface():
     
     def process_video(reference_video, grid_size, preview_downsample):
         """Process video and return tracking results."""
+        app.logger.info(f"=== PROCESS VIDEO CALLED ===")
+        app.logger.info(f"Reference video: {reference_video}")
+        app.logger.info(f"Grid size: {grid_size}")
+        app.logger.info(f"Preview downsample: {preview_downsample}")
+        app.logger.info(f"App reference frame: {app.reference_frame}")
+        
         if reference_video is None:
+            app.logger.error("No reference video provided")
             return "Please upload a video file.", None
         
         try:
             # Load video (reference_video is now the direct video file)
+            app.logger.info("Loading video...")
             video = app.load_video(reference_video)
             app.current_video = video
+            app.logger.info(f"Video loaded: {video.shape}")
             
             # Log tracking parameters
             app.log_tracking_params(grid_size, app.reference_frame, preview_downsample)
@@ -872,11 +1014,18 @@ def create_gradio_interface():
             max_preview_points = preview_points_per_axis * preview_points_per_axis
             
             # Create preview video with tracked points (try both methods)
+            app.logger.info(f"Creating preview video with {max_preview_points} points...")
             try:
                 preview_video = app._create_preview_video(video, tracks, visibility, max_preview_points, app.reference_frame)
+                app.logger.info(f"Preview video created successfully: {preview_video}")
             except Exception as e:
-                print(f"Video preview failed, trying image sequence: {e}")
-                preview_video = app._create_preview_image_sequence(video, tracks, visibility)
+                app.logger.error(f"Video preview failed, trying image sequence: {e}")
+                try:
+                    preview_video = app._create_preview_image_sequence(video, tracks, visibility)
+                    app.logger.info(f"Image sequence preview created: {preview_video}")
+                except Exception as e2:
+                    app.logger.error(f"Image sequence preview also failed: {e2}")
+                    preview_video = None
             
             result_text = f"""
 Tracking completed successfully!
@@ -898,6 +1047,8 @@ DEBUG OUTPUT:
 Note: All coordinate data includes visibility confidence and reference frame markers.
             """
             
+            app.logger.info(f"Returning result text length: {len(result_text) if result_text else 0}")
+            app.logger.info(f"Returning preview video: {preview_video}")
             return result_text, preview_video
             
         except Exception as e:
@@ -957,6 +1108,48 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                 )
                 select_reference_btn = gr.Button("Select Current Frame as Reference", variant="secondary")
                 
+                # Mask drawing section
+                gr.Markdown("### Optional Mask Drawing")
+                mask_info = gr.Textbox(
+                    label="Mask Status",
+                    value="No mask drawn (will track full grid)",
+                    interactive=False,
+                    lines=1
+                )
+                draw_mask_btn = gr.Button("Draw Mask", variant="secondary")
+                
+                # Mask drawing interface (always visible)
+                gr.Markdown("**Instructions:** Draw white areas where you want to track points. Black areas will be ignored.")
+                
+                # Brush size control
+                mask_brush_size_slider = gr.Slider(
+                    minimum=5,
+                    maximum=100,
+                    value=20,
+                    step=5,
+                    label="Brush Size",
+                    info="Adjust the brush size for drawing"
+                )
+                
+                # Image editor for mask drawing
+                mask_editor = gr.ImageEditor(
+                    label="Draw Your Mask Here",
+                    type="pil",
+                    height=400,
+                    brush=gr.Brush(default_size=20, colors=["#FFFFFF", "#000000"])
+                )
+                
+                with gr.Row():
+                    save_mask_btn = gr.Button("Save Mask", variant="primary")
+                    cancel_mask_btn = gr.Button("Cancel", variant="secondary")
+                
+                # Status display
+                mask_result = gr.Textbox(
+                    label="Mask Creation Result",
+                    lines=3,
+                    interactive=False
+                )
+                
                 # Tracking parameters
                 gr.Markdown("### Tracking Parameters")
                 grid_size = gr.Slider(
@@ -966,7 +1159,8 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                 preview_downsample = gr.Dropdown(
                     choices=[("1/10 (every 10th point)", 10), ("1/8 (every 8th point)", 8), ("1/6 (every 6th point)", 6), ("1/4 (every 4th point)", 4), ("1/3 (every 3rd point)", 3), ("1/2 (every 2nd point)", 2), ("1/1 (all points)", 1)],
                     value=4,
-                    label="Preview Downsample (ratio of Grid Size to show)"
+                    label="Preview Downsample (ratio of Grid Size to show)",
+                    interactive=True
                 )
                 process_btn = gr.Button("Process Video", variant="primary")
                 
@@ -1024,6 +1218,123 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             fn=export_nuke_file,
             inputs=[output_filename],
             outputs=[export_result]
+        )
+        
+        
+        # Event handlers for mask interface
+        def update_mask_brush_size(size):
+            """Update brush size - EXACT copy from working simple_mask_tool.py"""
+            app.logger.info(f"Updating brush size to: {size}")
+            return gr.ImageEditor(
+                label="Draw Your Mask Here",
+                type="pil",
+                height=400,
+                brush=gr.Brush(default_size=int(size), colors=["#FFFFFF", "#000000"])
+            )
+        
+        mask_brush_size_slider.change(
+            fn=update_mask_brush_size,
+            inputs=[mask_brush_size_slider],
+            outputs=[mask_editor]
+        )
+        
+        def open_mask_drawing():
+            """Load reference frame into mask editor."""
+            if app.current_video is None:
+                return "Please upload a video first.", None
+            
+            # Get reference frame image
+            ref_frame = app.get_reference_frame_image()
+            if ref_frame is None:
+                return "Please select a reference frame first.", None
+            
+            # Convert reference frame to PIL for the editor
+            from PIL import Image
+            ref_pil = Image.fromarray(ref_frame)
+            
+            return "Ready to draw mask. Use white brush to mark areas for tracking.", ref_pil
+        
+        def save_mask_from_editor(edited_image):
+            """Process the edited image and save as mask."""
+            try:
+                if app.reference_frame_image is None:
+                    return "Error: No reference frame loaded. Please select a reference frame first.", gr.Accordion(visible=True), "Error: No reference frame"
+                
+                # Add debug logging
+                app.logger.info(f"Processing mask from editor, image type: {type(edited_image)}")
+                
+                # Handle ImageEditor dictionary format
+                if isinstance(edited_image, dict):
+                    app.logger.info(f"ImageEditor dict keys: {edited_image.keys()}")
+                    if 'composite' in edited_image:
+                        edited_pil = edited_image['composite']
+                    elif 'background' in edited_image:
+                        edited_pil = edited_image['background']
+                    else:
+                        for key, value in edited_image.items():
+                            if hasattr(value, 'save'):  # PIL Image check
+                                edited_pil = value
+                                break
+                        else:
+                            error_msg = f"Could not find image in ImageEditor data. Keys: {list(edited_image.keys())}"
+                            app.logger.error(error_msg)
+                            return error_msg, gr.Accordion(visible=True), "Error extracting image"
+                else:
+                    edited_pil = edited_image
+                
+                # Convert to numpy array
+                edited_array = np.array(edited_pil)
+                app.logger.info(f"Converted to array: {edited_array.shape}")
+                
+                # Extract mask
+                mask = app.extract_mask_from_edited_image(app.reference_frame_image, edited_array)
+                app.logger.info(f"Extracted mask: {mask.shape}, unique values: {np.unique(mask)}")
+                
+                # Save mask
+                mask_path = app.save_mask(mask)
+                
+                if app.is_mask_empty(mask):
+                    result_msg = "Mask is empty - will track full grid"
+                    mask_status = "No mask drawn (will track full grid)"
+                    app.logger.info("Mask is empty, will use full grid")
+                else:
+                    white_pixels = np.sum(mask == 255)
+                    total_pixels = mask.shape[0] * mask.shape[1]
+                    coverage = (white_pixels / total_pixels) * 100
+                    result_msg = f"Mask saved successfully!\nCoverage: {coverage:.1f}% of image\nFile: {mask_path}"
+                    mask_status = f"Mask active ({coverage:.1f}% coverage)"
+                    app.logger.info(f"Mask saved with {coverage:.1f}% coverage")
+                
+                app.logger.info(f"Returning mask result: {result_msg}")
+                app.logger.info(f"Returning mask status: {mask_status}")
+                return result_msg, mask_status
+            
+            except Exception as e:
+                error_msg = f"Error creating mask: {str(e)}"
+                app.logger.error(error_msg, exc_info=True)
+                return error_msg, "Error creating mask"
+        
+        def cancel_mask_drawing():
+            """Cancel mask drawing."""
+            return "Mask drawing cancelled"
+        
+        # Connect mask drawing events
+        draw_mask_btn.click(
+            fn=open_mask_drawing,
+            inputs=[],
+            outputs=[mask_info, mask_editor]
+        )
+        
+        save_mask_btn.click(
+            fn=save_mask_from_editor,
+            inputs=[mask_editor],
+            outputs=[mask_result, mask_info]
+        )
+        
+        cancel_mask_btn.click(
+            fn=cancel_mask_drawing,
+            inputs=[],
+            outputs=[mask_info]
         )
     
     return interface

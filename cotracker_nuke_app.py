@@ -1595,15 +1595,31 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         except Exception as e:
             return f"Error processing video: {str(e)}", None
     
-    def handle_file_selection(selected_file):
-        """Handle file selection from FileExplorer."""
-        if selected_file:
-            # Ensure .nk extension
-            file_path = str(selected_file)
-            if not file_path.endswith('.nk'):
-                file_path += '.nk'
-            return file_path
-        return ""
+    def browse_save_file():
+        """Open standard OS file dialog to select save location."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            # Create root window and hide it
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes('-topmost', True)  # Keep dialog on top
+            
+            # Open save file dialog
+            file_path = filedialog.asksaveasfilename(
+                title="Save Nuke Tracker File",
+                defaultextension=".nk",
+                filetypes=[("Nuke files", "*.nk"), ("All files", "*.*")],
+                initialdir="."
+            )
+            
+            root.destroy()
+            return file_path if file_path else ""
+            
+        except Exception as e:
+            app.logger.error(f"Error opening file dialog: {str(e)}")
+            return f"Error: {str(e)}"
     
     def export_nuke_file(output_file_path, frame_offset):
         """Export tracking data to Nuke file."""
@@ -1743,17 +1759,13 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                     value=1001,
                     info="Frame offset for image sequences (videos start at 0, but image sequences may start at different frame numbers)"
                 )
-                output_file_explorer = gr.FileExplorer(
-                    label="Select Output .nk File Location",
-                    root_dir=".",
-                    file_count="single",
-                    height=200
-                )
-                output_file_path = gr.Textbox(
-                    label="Selected Output Path",
-                    interactive=False,
-                    placeholder="No file selected"
-                )
+                with gr.Row():
+                    output_file_path = gr.Textbox(
+                        label="Output .nk File Path",
+                        placeholder="C:/Projects/my_tracking.nk",
+                        scale=4
+                    )
+                    browse_btn = gr.Button("Browse...", scale=1, size="sm")
             export_btn = gr.Button("Export to Nuke", variant="secondary")
             export_result = gr.Textbox(
                 label="Export Status", 
@@ -1790,10 +1802,10 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             outputs=[result_text, preview_video]
         )
         
-        # Handle file selection
-        output_file_explorer.change(
-            fn=handle_file_selection,
-            inputs=[output_file_explorer],
+        # Browse button for file selection
+        browse_btn.click(
+            fn=browse_save_file,
+            inputs=[],
             outputs=[output_file_path]
         )
         

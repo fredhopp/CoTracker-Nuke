@@ -248,7 +248,7 @@ tracks {{ {{ 1 31 {num_tracks} }}
 {chr(10).join(track_data_lines)}
 }} 
 }}
-}}
+
 reference_frame {min_frame}
 translate {{{{curve {translate_x_curve}}}}} {{{{curve {translate_y_curve}}}}}
 center {{{{curve {center_x_curve}}}}} {{{{curve {center_y_curve}}}}}

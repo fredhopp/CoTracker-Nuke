@@ -28,6 +28,7 @@ import gradio as gr
 from pathlib import Path
 import json
 import tempfile
+import csv
 from scipy.spatial.distance import pdist, squareform
 from scipy.optimize import linear_sum_assignment
 import logging
@@ -136,8 +137,45 @@ class CoTrackerNukeApp:
         self.logger.info(f"  Worst tracked point visibility: {np.min(point_visibility):.1%}")
         self.logger.info(f"  Average point visibility: {np.mean(point_visibility):.1%}")
     
+    def generate_csv_with_frame_offset(self, tracks: torch.Tensor, visibility: torch.Tensor, 
+                                     frame_offset: int = 0) -> str:
+        """Generate CSV file with frame offset applied for Nuke export."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_path = self.debug_dir / f"full_coords_{timestamp}_frameoffset.csv"
+        
+        # Convert to numpy
+        tracks_np = tracks[0].cpu().numpy()  # Shape: (T, N, 2)
+        visibility_np = visibility[0].cpu().numpy()  # Shape: (T, N) or (T, N, 1)
+        
+        if len(visibility_np.shape) == 3:
+            visibility_np = visibility_np[:, :, 0]
+        
+        # Write CSV with frame offset applied
+        with open(csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['frame', 'point_id', 'x', 'y', 'visible', 'confidence', 'is_reference_frame'])
+            
+            num_frames, num_points = tracks_np.shape[0], tracks_np.shape[1]
+            
+            for frame_idx in range(num_frames):
+                for point_id in range(num_points):
+                    frame_number = frame_idx + frame_offset  # Apply frame offset
+                    x = tracks_np[frame_idx, point_id, 0]
+                    y = tracks_np[frame_idx, point_id, 1]
+                    visible = visibility_np[frame_idx, point_id] > 0.5
+                    confidence = float(visibility_np[frame_idx, point_id])
+                    is_reference_frame = frame_idx == 0  # First frame is reference
+                    
+                    writer.writerow([
+                        frame_number, point_id, f"{x:.2f}", f"{y:.2f}", 
+                        str(visible), f"{confidence:.3f}", str(is_reference_frame)
+                    ])
+        
+        self.logger.info(f"Generated CSV with frame offset {frame_offset}: {csv_path}")
+        return str(csv_path)
+    
     def export_coordinates(self, tracks: torch.Tensor, visibility: torch.Tensor, 
-                          grid_size: int, preview_downsample: int, reference_frame: int):
+                          grid_size: int, preview_downsample: int, reference_frame: int, frame_offset: int = 0):
         """Export coordinate data to files."""
         if not self.debug_mode:
             return
@@ -1622,12 +1660,14 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             return f"Error: {str(e)}"
     
     def export_nuke_file(output_file_path, frame_offset):
-        """Export tracking data to Nuke file."""
+        """Export tracking data to Nuke file using generate_exact_nuke_file.py."""
         if app.tracking_results is None:
             return "Please process a video first."
         
+        # Use default path if not specified
         if not output_file_path:
-            return "Please select an output file location."
+            timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
+            output_file_path = f"outputs/CoTracker_{timestamp}.nk"
         
         # Ensure .nk extension
         if not output_file_path.endswith('.nk'):
@@ -1635,22 +1675,31 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         
         try:
             tracks, visibility = app.tracking_results
-            video_info = {
-                'width': app.current_video.shape[2],
-                'height': app.current_video.shape[1], 
-                'fps': 24  # Default FPS
-            }
             
-            # Export all tracked points (not just corner selection)
-            # TODO: Apply frame_offset when generating CSV and .nk files
-            nuke_script = app.export_all_tracks_to_nuke(
-                tracks, visibility, output_file_path, video_info
+            # Generate CSV with frame offset
+            csv_path = app.generate_csv_with_frame_offset(tracks, visibility, int(frame_offset))
+            
+            # Import and use generate_exact_nuke_file
+            from generate_exact_nuke_file import generate_exact_nuke_file
+            
+            # Get image height from video
+            image_height = app.current_video.shape[1]  # Height is shape[1]
+            
+            # Generate the .nk file
+            nuke_file_path = generate_exact_nuke_file(
+                csv_path=csv_path,
+                output_path=output_file_path,
+                image_height=image_height,
+                min_confidence=0.5,
+                tracker_node_name=None,  # Will auto-generate from filename
+                frame_offset=int(frame_offset),  # Pass frame offset for reference frame calculation
+                reference_frame=app.reference_frame  # User's chosen reference frame
             )
             
-            return f"Nuke tracker file exported successfully to: {output_file_path}\nFrame offset: {frame_offset} (will be applied in future update)"
+            return f"✅ Nuke tracker file exported successfully!\n📁 Location: {nuke_file_path}\n📊 Frame offset: {frame_offset} applied\n🎯 CSV generated: {csv_path}"
             
         except Exception as e:
-            return f"Error exporting Nuke file: {str(e)}"
+            return f"❌ Error exporting Nuke file: {str(e)}"
     
     # Create Gradio interface
     with gr.Blocks(title="CoTracker Nuke Integration") as interface:
@@ -1755,9 +1804,14 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         # Output file selection - full width like preview
         gr.Markdown("## Export to Nuke")
         with gr.Row():
+            # Generate default output path
+            timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
+            default_output_path = f"outputs/CoTracker_{timestamp}.nk"
+            
             output_file_path = gr.Textbox(
                 label="Output .nk File Path",
-                placeholder="C:/Projects/my_tracking.nk",
+                value=default_output_path,
+                placeholder="outputs/CoTracker_YYMMDD_HHMMSS.nk",
                 scale=5
             )
             browse_btn = gr.Button("Browse...", scale=1)

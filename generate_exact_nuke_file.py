@@ -8,7 +8,8 @@ import csv
 import os
 from datetime import datetime
 
-def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_confidence=0.5):
+def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_confidence=0.5, 
+                            tracker_node_name=None, frame_offset=0, reference_frame=0):
     """
     Generate exact .nk file matching the ground truth structure.
     
@@ -17,20 +18,31 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
         output_path: Output .nk file path (auto-generated if None)
         image_height: Image height for coordinate conversion (default 1080)
         min_confidence: Minimum confidence threshold (default 0.5)
+        tracker_node_name: Name for the tracker node (auto-generated if None)
+        frame_offset: Offset to add to all frame numbers (default 0)
+        reference_frame: User's chosen reference frame (default 0)
     """
     
     # Auto-generate output path if not provided
     if output_path is None:
-        base_name = os.path.splitext(os.path.basename(csv_path))[0]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"cotracker_exact_{base_name}_{timestamp}.nk"
+        timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
+        output_path = f"outputs/CoTracker_{timestamp}.nk"
+    
+    # Auto-generate tracker node name if not provided
+    if tracker_node_name is None:
+        # Extract filename without extension from output path
+        base_name = os.path.splitext(os.path.basename(output_path))[0]
+        tracker_node_name = base_name
     
     print(f"CoTracker CSV to Exact Nuke .nk Generator")
     print(f"=" * 50)
     print(f"Input CSV: {csv_path}")
     print(f"Output .nk: {output_path}")
+    print(f"Tracker Node Name: {tracker_node_name}")
     print(f"Image Height: {image_height}")
     print(f"Min Confidence: {min_confidence}")
+    print(f"Frame Offset: {frame_offset}")
+    print(f"Reference Frame: {reference_frame}")
     print()
     
     # Read and process CSV data
@@ -48,7 +60,7 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
                 continue
                 
             total_rows += 1
-            frame = int(row[0])
+            frame = int(row[0]) + frame_offset  # Apply frame offset
             point_id = int(row[1])
             x = float(row[2])
             y = float(row[3])
@@ -150,51 +162,12 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
         track_line = f' {{ {{curve K 1}} "track {track_idx+1}" {{curve {x_curve}}} {{curve {y_curve}}} {{curve K 0}} {{curve K 0}} 1 0 0 {{curve 0}} 1 0 -32 -32 32 32 -22 -22 22 22 {{}} {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}   }}'
         track_data_lines.append(track_line)
     
-    # Calculate center point (average of all first frame positions)
-    center_x = 0
-    center_y = 0
-    valid_points = 0
-    
-    for point_id in point_ids:
-        if min_frame in tracker_dict[point_id]:
-            x_val, y_val = tracker_dict[point_id][min_frame]
-            center_x += x_val
-            center_y += y_val
-            valid_points += 1
-    
-    if valid_points > 0:
-        center_x /= valid_points
-        center_y /= valid_points
-    
-    # Generate translate curves (difference from center for first point)
-    translate_x_values = []
-    translate_y_values = []
-    
-    if point_ids and min_frame in tracker_dict[point_ids[0]]:
-        first_point_data = tracker_dict[point_ids[0]]
-        for frame in frame_range:
-            if frame in first_point_data:
-                x_val, y_val = first_point_data[frame]
-                # Calculate offset from center
-                offset_x = x_val - center_x
-                offset_y = y_val - center_y
-                translate_x_values.append(str(offset_x))
-                translate_y_values.append(str(offset_y))
-            else:
-                translate_x_values.append("0")
-                translate_y_values.append("0")
-    
-    translate_x_curve = " ".join(translate_x_values)
-    translate_y_curve = " ".join(translate_y_values)
-    
-    # Generate center curves (constant values)
-    center_x_curve = " ".join([str(center_x)] * len(frame_range))
-    center_y_curve = " ".join([str(center_y)] * len(frame_range))
+    # Note: translate and center curves removed as per user request
     
     # Generate complete .nk file content matching exact structure
     nk_content = f'''Root {{
 inputs 0
-name Z:/Dev/Cotracker/assets/tracker_from_full_coords_20250928_171202.nk
+name {output_path}
 frame {min_frame}
 format "2048 1556 0 0 2048 1556 1 2K_Super_35(full-ap)"
 proxy_type scale
@@ -249,11 +222,9 @@ tracks {{ {{ 1 31 {num_tracks} }}
 }} 
 }}
 
-reference_frame {min_frame}
-translate {{{{curve {translate_x_curve}}}}} {{{{curve {translate_y_curve}}}}}
-center {{{{curve {center_x_curve}}}}} {{{{curve {center_y_curve}}}}}
+reference_frame {reference_frame + frame_offset}
 selected_tracks {num_tracks - 1}
-name CoTracker_Small_{num_tracks}pts
+name {tracker_node_name}
 selected true
 xpos 191
 ypos 57
@@ -267,7 +238,7 @@ ypos 57
     print(f"SUCCESS: Generated {output_path}")
     print(f"   {num_tracks} tracks with {total_rows - filtered_rows} total keyframes")
     print(f"   Frame range: {min_frame}-{max_frame}")
-    print(f"   Center point: ({center_x:.2f}, {center_y:.2f})")
+    print(f"   Reference frame: {reference_frame + frame_offset}")
     print(f"   Ready to load in Nuke!")
     print()
     
@@ -275,7 +246,7 @@ ypos 57
 
 if __name__ == "__main__":
     # Configuration
-    csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_175832.csv"
+    csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_214434.csv"
     image_height = 1080
     min_confidence = 0.5
     

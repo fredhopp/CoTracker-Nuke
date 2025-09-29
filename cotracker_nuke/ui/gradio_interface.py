@@ -42,12 +42,16 @@ class GradioInterface:
             self.app.load_video(reference_video)
             self.preview_video_path = reference_video
             
-            # Get video info
+            # Get video info including FPS
             info = self.app.get_video_info()
+            
+            # Get FPS from video metadata
+            fps_info = self.get_video_fps(reference_video)
             
             status_msg = (f"✅ Video loaded successfully!\n"
                          f"📹 Frames: {info['frames']}\n"
                          f"📐 Resolution: {info['width']}x{info['height']}\n"
+                         f"🎬 FPS: {fps_info}\n"
                          f"💾 Size: {info['memory_mb']:.1f} MB")
             
             return status_msg, reference_video
@@ -57,14 +61,31 @@ class GradioInterface:
             self.logger.error(error_msg)
             return error_msg, None
     
+    def update_frame_slider_range(self, reference_video) -> dict:
+        """Update frame slider range when video is loaded."""
+        try:
+            if reference_video is None or self.app.current_video is None:
+                return gr.update()
+            
+            info = self.app.get_video_info()
+            # Get the current start frame offset (default to 1001)
+            start_offset = 1001  # This should ideally come from the interface
+            max_frame = start_offset + info['frames'] - 1
+            
+            return gr.update(minimum=start_offset, maximum=max_frame, value=start_offset)
+            
+        except Exception as e:
+            self.logger.error(f"Error updating slider range: {e}")
+            return gr.update()
+    
     def set_manual_reference_frame(self, frame_number_with_offset: int, 
-                                  start_frame_offset: int) -> Tuple[str, Optional[Image.Image]]:
-        """Set manual reference frame and return image for masking."""
+                                  start_frame_offset: int) -> Tuple[Optional[Image.Image], Optional[Image.Image]]:
+        """Set manual reference frame and return frame preview + mask editor image."""
         try:
             # Validate input
             if frame_number_with_offset < start_frame_offset:
-                return (f"❌ Error: Frame number {frame_number_with_offset} is less than "
-                       f"start frame offset {start_frame_offset}"), None
+                self.logger.error(f"Frame number {frame_number_with_offset} is less than start frame offset {start_frame_offset}")
+                return None, None
             
             # Calculate 0-based video frame
             frame_number = frame_number_with_offset - start_frame_offset
@@ -75,21 +96,21 @@ class GradioInterface:
             # Get reference frame image
             frame_image = self.app.get_reference_frame_image()
             if frame_image is None:
-                return "❌ Error: Could not load reference frame", None
+                self.logger.error("Could not load reference frame")
+                return None, None
             
             # Convert to PIL Image
             pil_image = Image.fromarray(frame_image.astype(np.uint8))
             
-            info_msg = (f"✅ Reference frame set to {frame_number_with_offset} "
-                       f"(video frame {actual_frame})\n"
-                       f"🎯 Ready for mask drawing")
+            self.logger.info(f"Reference frame set to {frame_number_with_offset} (video frame {actual_frame})")
             
-            return info_msg, pil_image
+            # Return the same image for both frame preview and mask editor
+            return pil_image, pil_image
             
         except Exception as e:
-            error_msg = f"❌ Error setting reference frame: {str(e)}"
+            error_msg = f"Error setting reference frame: {str(e)}"
             self.logger.error(error_msg)
-            return error_msg, None
+            return None, None
     
     def process_video(self, reference_video, grid_size: int) -> Tuple[str, Optional[str]]:
         """Process video with tracking and return status + preview video."""
@@ -217,16 +238,16 @@ class GradioInterface:
                 type="filepath"
             )
             
-            # Video player for uploaded video
+            # Regular video player for realtime playback
             video_player = gr.Video(
-                label="📹 Uploaded Video",
+                label="📹 Video Player",
                 height=300
             )
             
             video_status = gr.Textbox(
                 label="📊 Video Status",
                 interactive=False,
-                lines=3
+                lines=4
             )
             
             # === STEP 2: IMAGE SEQUENCE START FRAME ===
@@ -243,24 +264,27 @@ class GradioInterface:
             
             with gr.Row():
                 with gr.Column(scale=2):
-                    manual_frame_input = gr.Number(
-                        label="🎯 Frame #",
+                    frame_display = gr.Image(
+                        label="🖼️ Reference Frame Preview",
+                        height=300,
+                        type="pil"
+                    )
+                
+                with gr.Column(scale=1):
+                    frame_slider = gr.Slider(
+                        minimum=1001,
+                        maximum=1100,  # Will be updated when video loads
+                        step=1,
                         value=1001,
+                        label="🎬 Frame #",
                         info="Frame number for tracking reference (includes start frame offset)"
                     )
                     
-                with gr.Column(scale=1):
                     set_manual_frame_btn = gr.Button(
                         "📤 Set Reference Frame",
                         variant="primary",
                         size="lg"
                     )
-            
-            reference_frame_info = gr.Textbox(
-                label="ℹ️ Reference Frame Info",
-                interactive=False,
-                lines=2
-            )
             
             # === STEP 4: OPTIONAL MASK DRAWING ===
             gr.Markdown("""
@@ -302,6 +326,13 @@ class GradioInterface:
                         value=40,
                         label="🔢 Grid Size (Points per Side)",
                         info="Higher values = more tracking points"
+                    )
+                    
+                    vram_warning = gr.Textbox(
+                        label="⚠️ VRAM Warning",
+                        interactive=False,
+                        lines=2,
+                        visible=False
                     )
                     
                 with gr.Column(scale=1):
@@ -360,10 +391,31 @@ class GradioInterface:
                 outputs=[video_status, video_player]
             )
             
+            # Update slider range when video loads
+            reference_video.change(
+                fn=self.update_frame_slider_range,
+                inputs=[reference_video],
+                outputs=[frame_slider]
+            )
+            
             set_manual_frame_btn.click(
                 fn=self.set_manual_reference_frame,
-                inputs=[manual_frame_input, image_sequence_start_frame],
-                outputs=[reference_frame_info, mask_editor]
+                inputs=[frame_slider, image_sequence_start_frame],
+                outputs=[frame_display, mask_editor]
+            )
+            
+            # Update frame display only on slider release (not during dragging)
+            frame_slider.release(
+                fn=self.update_frame_from_input,
+                inputs=[frame_slider, image_sequence_start_frame],
+                outputs=[frame_display]
+            )
+            
+            # Check VRAM warning when grid size changes
+            grid_size.change(
+                fn=self.check_vram_warning,
+                inputs=[grid_size],
+                outputs=[vram_warning]
             )
             
             process_btn.click(
@@ -396,6 +448,13 @@ class GradioInterface:
                 outputs=[mask_result]
             )
             
+            # Update VRAM warning when mask is used
+            use_mask_btn.click(
+                fn=self.check_vram_warning,
+                inputs=[grid_size],
+                outputs=[vram_warning]
+            )
+            
             file_picker_btn.click(
                 fn=lambda: gr.update(value=self.get_default_output_path()),
                 outputs=[output_file_path]
@@ -406,8 +465,66 @@ class GradioInterface:
                 inputs=[output_file_path, image_sequence_start_frame],
                 outputs=[export_status]
             )
+            
         
         return interface
+    
+    def get_video_fps(self, video_path: str) -> str:
+        """Get FPS information from video metadata."""
+        try:
+            import cv2
+            cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+            return f"{fps:.2f}" if fps > 0 else "Unknown"
+        except Exception as e:
+            self.logger.warning(f"Could not get FPS: {e}")
+            return "Unknown"
+    
+    def update_frame_from_input(self, frame_number_with_offset: int, start_frame_offset: int) -> Optional[Image.Image]:
+        """Update frame display when Frame # input changes."""
+        try:
+            if self.app.current_video is None:
+                return None
+            
+            # Calculate 0-based video frame
+            if frame_number_with_offset < start_frame_offset:
+                return None
+            
+            frame_number = frame_number_with_offset - start_frame_offset
+            
+            # Get the requested frame
+            frame = self.app.video_processor.get_frame(int(frame_number))
+            if frame is None:
+                return None
+            
+            # Convert to PIL Image
+            frame_pil = Image.fromarray(frame.astype(np.uint8))
+            return frame_pil
+            
+        except Exception as e:
+            self.logger.error(f"Error displaying frame {frame_number_with_offset}: {str(e)}")
+            return None
+    
+    def check_vram_warning(self, grid_size: int) -> dict:
+        """Check if VRAM warning should be displayed."""
+        try:
+            if grid_size > 50:
+                # Check if mask is available
+                has_mask = self.app.mask_handler.current_mask is not None
+                
+                if not has_mask:
+                    warning_msg = (f"⚠️ High VRAM usage warning!\n"
+                                 f"Grid size {grid_size} without mask = {grid_size * grid_size:,} points.\n"
+                                 f"Consider using a mask or reducing grid size to avoid GPU memory issues.")
+                    return gr.update(value=warning_msg, visible=True)
+            
+            # Hide warning if conditions not met
+            return gr.update(visible=False)
+            
+        except Exception as e:
+            self.logger.error(f"Error checking VRAM warning: {e}")
+            return gr.update(visible=False)
 
 
 def create_gradio_interface(debug_mode: bool = True, console_log_level: str = "INFO") -> gr.Blocks:

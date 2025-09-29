@@ -96,13 +96,12 @@ class CoTrackerEngine:
         # Convert to tensor format expected by CoTracker
         queries_tensor = torch.tensor([queries], dtype=torch.float32, device=self.device)
         
+        self.logger.info(f"Generated {len(queries)} query points ({grid_size}x{grid_size}) on frame {reference_frame}")
+        self.logger.debug(f"Query tensor shape before mask filtering: {queries_tensor.shape}")
+        
         # Apply mask filtering if mask is available
         if mask is not None:
             queries_tensor = self._apply_mask_to_grid(queries_tensor, mask)
-        
-        self.logger.info(f"Generated {len(queries)} query points on frame {reference_frame}")
-        self.logger.debug(f"Query tensor shape before mask filtering: {queries_tensor.shape}")
-        if mask is not None:
             self.logger.debug(f"Query tensor shape after mask filtering: {queries_tensor.shape}")
         
         return queries_tensor
@@ -230,6 +229,8 @@ class CoTrackerEngine:
                 self.logger.info(f"Using custom reference frame: {reference_frame} with bidirectional tracking{mask_info}")
                 
                 queries = self.generate_grid_queries(video, grid_size, reference_frame, mask)
+                self.logger.info(f"Generated {queries.shape[1] if len(queries.shape) > 1 else 0} query points for tracking")
+                
                 pred_tracks, pred_visibility = self.cotracker_model(
                     video_tensor, 
                     queries=queries,

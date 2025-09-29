@@ -107,7 +107,10 @@ class CoTrackerNukeApp:
             mask = self.mask_handler.process_mask_from_editor(edited_image)
             
             if self.mask_handler.is_mask_empty(mask):
-                return "⚠️ Mask is empty or too small. Please draw a larger mask area.", mask
+                # Clear the current mask when canvas is cleared
+                self.mask_handler.current_mask = None
+                self.logger.info("Mask cleared - set current_mask to None")
+                return "✅ Mask cleared successfully. No mask will be applied during tracking.", mask
             
             mask_path = self.mask_handler.save_mask(mask)
             stats = self.mask_handler.get_mask_stats(mask)

@@ -1495,12 +1495,13 @@ def create_gradio_interface():
         except Exception as e:
             return f"Error selecting reference frame: {str(e)}"
     
-    def process_video(reference_video, grid_size, preview_downsample):
+    def process_video(reference_video, grid_size):
         """Process video and return tracking results."""
         app.logger.info(f"=== PROCESS VIDEO CALLED ===")
         app.logger.info(f"Reference video: {reference_video}")
         app.logger.info(f"Grid size: {grid_size}")
-        app.logger.info(f"Preview downsample: {preview_downsample}")
+        preview_downsample = 1  # Always use 1/1 (all points)
+        app.logger.info(f"Preview downsample: {preview_downsample} (fixed to 1/1)")
         app.logger.info(f"App reference frame: {app.reference_frame}")
         
         if reference_video is None:
@@ -1571,16 +1572,17 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         except Exception as e:
             return f"Error processing video: {str(e)}", None
     
-    def export_nuke_file(output_filename):
+    def export_nuke_file(output_file_path, frame_offset):
         """Export tracking data to Nuke file."""
         if app.tracking_results is None:
             return "Please process a video first."
         
-        if not output_filename:
-            output_filename = "cotracker_tracks.nk"
+        if not output_file_path:
+            return "Please select an output file location."
         
-        if not output_filename.endswith('.nk'):
-            output_filename += '.nk'
+        # Ensure .nk extension
+        if not output_file_path.endswith('.nk'):
+            output_file_path += '.nk'
         
         try:
             tracks, visibility = app.tracking_results
@@ -1591,11 +1593,12 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             }
             
             # Export all tracked points (not just corner selection)
+            # TODO: Apply frame_offset when generating CSV and .nk files
             nuke_script = app.export_all_tracks_to_nuke(
-                tracks, visibility, output_filename, video_info
+                tracks, visibility, output_file_path, video_info
             )
             
-            return f"Nuke tracker file exported successfully to: {output_filename}"
+            return f"Nuke tracker file exported successfully to: {output_file_path}\nFrame offset: {frame_offset} (will be applied in future update)"
             
         except Exception as e:
             return f"Error exporting Nuke file: {str(e)}"
@@ -1673,12 +1676,7 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                     minimum=5, maximum=70, value=10, step=1,
                     label="Grid Size (number of points to track)"
                 )
-                preview_downsample = gr.Dropdown(
-                    choices=[("1/10 (every 10th point)", 10), ("1/8 (every 8th point)", 8), ("1/6 (every 6th point)", 6), ("1/4 (every 4th point)", 4), ("1/3 (every 3rd point)", 3), ("1/2 (every 2nd point)", 2), ("1/1 (all points)", 1)],
-                    value=4,
-                    label="Preview Downsample (ratio of Grid Size to show)",
-                    interactive=True
-                )
+# Preview downsample removed - always use 1/1 (all points)
                 process_btn = gr.Button("Process Video", variant="primary")
                 
             with gr.Column(scale=1):
@@ -1696,11 +1694,17 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         )
         
         with gr.Row():
-            output_filename = gr.Textbox(
-                label="Output Filename", 
-                value="cotracker_tracks.nk",
-                placeholder="Enter filename for Nuke script"
-            )
+            with gr.Column():
+                image_sequence_start_frame = gr.Number(
+                    label="Image Sequence Start Frame",
+                    value=1001,
+                    info="Frame offset for image sequences (videos start at 0, but image sequences may start at different frame numbers)"
+                )
+                output_file_picker = gr.File(
+                    label="Output .nk File Location",
+                    file_types=[".nk"],
+                    type="filepath"
+                )
             export_btn = gr.Button("Export to Nuke", variant="secondary")
             export_result = gr.Textbox(
                 label="Export Status", 
@@ -1726,14 +1730,14 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         # Process video
         process_btn.click(
             fn=process_video,
-            inputs=[reference_video, grid_size, preview_downsample],
+            inputs=[reference_video, grid_size],
             outputs=[result_text, preview_video]
         )
         
         # Export to Nuke
         export_btn.click(
             fn=export_nuke_file,
-            inputs=[output_filename],
+            inputs=[output_file_picker, image_sequence_start_frame],
             outputs=[export_result]
         )
         

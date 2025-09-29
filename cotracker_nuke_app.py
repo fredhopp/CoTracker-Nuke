@@ -137,11 +137,10 @@ class CoTrackerNukeApp:
         self.logger.info(f"  Worst tracked point visibility: {np.min(point_visibility):.1%}")
         self.logger.info(f"  Average point visibility: {np.mean(point_visibility):.1%}")
     
-    def generate_csv_with_frame_offset(self, tracks: torch.Tensor, visibility: torch.Tensor, 
-                                     frame_offset: int = 0) -> str:
-        """Generate CSV file with frame offset applied for Nuke export."""
+    def generate_csv_for_nuke_export(self, tracks: torch.Tensor, visibility: torch.Tensor) -> str:
+        """Generate CSV file for Nuke export (frame offset will be applied during .nk generation)."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_path = self.debug_dir / f"full_coords_{timestamp}_frameoffset.csv"
+        csv_path = self.debug_dir / f"full_coords_{timestamp}_for_nuke.csv"
         
         # Convert to numpy
         tracks_np = tracks[0].cpu().numpy()  # Shape: (T, N, 2)
@@ -150,7 +149,7 @@ class CoTrackerNukeApp:
         if len(visibility_np.shape) == 3:
             visibility_np = visibility_np[:, :, 0]
         
-        # Write CSV with frame offset applied
+        # Write CSV without frame offset (will be applied in .nk generation)
         with open(csv_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(['frame', 'point_id', 'x', 'y', 'visible', 'confidence', 'is_reference_frame'])
@@ -159,19 +158,19 @@ class CoTrackerNukeApp:
             
             for frame_idx in range(num_frames):
                 for point_id in range(num_points):
-                    frame_number = frame_idx + frame_offset  # Apply frame offset
+                    frame_number = frame_idx  # No frame offset applied here
                     x = tracks_np[frame_idx, point_id, 0]
                     y = tracks_np[frame_idx, point_id, 1]
                     visible = visibility_np[frame_idx, point_id] > 0.5
                     confidence = float(visibility_np[frame_idx, point_id])
-                    is_reference_frame = frame_idx == 0  # First frame is reference
+                    is_reference_frame = frame_idx == self.reference_frame  # User's chosen reference frame
                     
                     writer.writerow([
                         frame_number, point_id, f"{x:.2f}", f"{y:.2f}", 
                         str(visible), f"{confidence:.3f}", str(is_reference_frame)
                     ])
         
-        self.logger.info(f"Generated CSV with frame offset {frame_offset}: {csv_path}")
+        self.logger.info(f"Generated CSV for Nuke export (no frame offset applied): {csv_path}")
         return str(csv_path)
     
     def export_coordinates(self, tracks: torch.Tensor, visibility: torch.Tensor, 
@@ -1676,8 +1675,8 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         try:
             tracks, visibility = app.tracking_results
             
-            # Generate CSV with frame offset
-            csv_path = app.generate_csv_with_frame_offset(tracks, visibility, int(frame_offset))
+            # Generate CSV for Nuke export (frame offset will be applied during .nk generation)
+            csv_path = app.generate_csv_for_nuke_export(tracks, visibility)
             
             # Import and use generate_exact_nuke_file
             from generate_exact_nuke_file import generate_exact_nuke_file

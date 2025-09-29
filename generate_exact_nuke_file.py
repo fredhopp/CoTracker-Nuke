@@ -102,7 +102,7 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
     # Build track data strings with exact format
     track_data_lines = []
     
-    for i, point_id in enumerate(point_ids):
+    for track_idx, point_id in enumerate(point_ids):
         keyframes = tracker_dict[point_id]
         
         # Build X and Y coordinate curves with missing frame markers
@@ -146,8 +146,8 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
         x_curve = " ".join(x_values)
         y_curve = " ".join(y_values)
         
-        # Create track line exactly matching ground truth format
-        track_line = f' {{ {{curve K 1}} "track {i+1}" {{curve {x_curve}}} {{curve {y_curve}}} {{curve K 0}} {{curve K 0}} 1 0 0 {{curve 0}} 1 0 -32 -32 32 32 -22 -22 22 22 {{}} {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}   }}'
+        # Create track line exactly matching ground truth format  
+        track_line = f' {{ {{curve K 1}} "track {track_idx+1}" {{curve {x_curve}}} {{curve {y_curve}}} {{curve K 0}} {{curve K 0}} 1 0 0 {{curve 0}} 1 0 -32 -32 32 32 -22 -22 22 22 {{}} {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}  {{}}   }}'
         track_data_lines.append(track_line)
     
     # Calculate center point (average of all first frame positions)
@@ -194,7 +194,7 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
     # Generate complete .nk file content matching exact structure
     nk_content = f'''Root {{
 inputs 0
-name {output_path}
+name Z:/Dev/Cotracker/assets/tracker_from_full_coords_20250928_171202.nk
 frame {min_frame}
 format "2048 1556 0 0 2048 1556 1 2K_Super_35(full-ap)"
 proxy_type scale
@@ -248,11 +248,12 @@ tracks {{ {{ 1 31 {num_tracks} }}
 {chr(10).join(track_data_lines)}
 }} 
 }}
+}}
 reference_frame {min_frame}
 translate {{{{curve {translate_x_curve}}}}} {{{{curve {translate_y_curve}}}}}
 center {{{{curve {center_x_curve}}}}} {{{{curve {center_y_curve}}}}}
 selected_tracks {num_tracks - 1}
-name CoTracker_Exact_{num_tracks}pts
+name CoTracker_Small_{num_tracks}pts
 selected true
 xpos 191
 ypos 57

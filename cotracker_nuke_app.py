@@ -173,114 +173,6 @@ class CoTrackerNukeApp:
         self.logger.info(f"Generated CSV for Nuke export (no frame offset applied): {csv_path}")
         return str(csv_path)
     
-    def export_coordinates(self, tracks: torch.Tensor, visibility: torch.Tensor, 
-                          grid_size: int, preview_downsample: int, reference_frame: int, frame_offset: int = 0):
-        """Export coordinate data to files."""
-        if not self.debug_mode:
-            return
-            
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Convert to numpy
-        tracks_np = tracks[0].cpu().numpy()  # Shape: (T, N, 2)
-        visibility_np = visibility[0].cpu().numpy()  # Shape: (T, N) or (T, N, 1)
-        
-        if len(visibility_np.shape) == 3:
-            visibility_np = visibility_np[:, :, 0]
-        
-        T, N, _ = tracks_np.shape
-        
-        # Export full grid coordinates
-        full_coords_file = self.debug_dir / f"full_grid_coords_{timestamp}.json"
-        full_data = {
-            "metadata": {
-                "timestamp": timestamp,
-                "grid_size": grid_size,
-                "reference_frame": reference_frame,
-                "total_points": N,
-                "total_frames": T,
-                "shape": tracks_np.shape
-            },
-            "coordinates": {},
-            "visibility": {}
-        }
-        
-        for frame in range(T):
-            full_data["coordinates"][f"frame_{frame}"] = []
-            full_data["visibility"][f"frame_{frame}"] = []
-            
-            for point in range(N):
-                x, y = tracks_np[frame, point]
-                vis = float(visibility_np[frame, point])
-                
-                full_data["coordinates"][f"frame_{frame}"].append({
-                    "point_id": point,
-                    "x": float(x),
-                    "y": float(y)
-                })
-                full_data["visibility"][f"frame_{frame}"].append({
-                    "point_id": point,
-                    "visible": vis > 0.5,
-                    "confidence": vis
-                })
-        
-        with open(full_coords_file, 'w') as f:
-            json.dump(full_data, f, indent=2)
-        
-        self.logger.info(f"Full grid coordinates exported to: {full_coords_file}")
-        
-        # Export preview grid coordinates
-        preview_points_per_axis = max(1, grid_size // preview_downsample)
-        max_preview_points = preview_points_per_axis * preview_points_per_axis
-        
-        # Select preview points (same logic as in _create_preview_video)
-        selected_point_indices = self._select_preview_points(tracks_np, visibility_np, max_preview_points, reference_frame)
-        
-        preview_coords_file = self.debug_dir / f"preview_grid_coords_{timestamp}.json"
-        preview_data = {
-            "metadata": {
-                "timestamp": timestamp,
-                "grid_size": grid_size,
-                "reference_frame": reference_frame,
-                "preview_downsample": preview_downsample,
-                "preview_points_per_axis": preview_points_per_axis,
-                "max_preview_points": max_preview_points,
-                "actual_preview_points": len(selected_point_indices),
-                "selected_point_indices": selected_point_indices
-            },
-            "coordinates": {},
-            "visibility": {}
-        }
-        
-        for frame in range(T):
-            preview_data["coordinates"][f"frame_{frame}"] = []
-            preview_data["visibility"][f"frame_{frame}"] = []
-            
-            for i, point_idx in enumerate(selected_point_indices):
-                x, y = tracks_np[frame, point_idx]
-                vis = float(visibility_np[frame, point_idx])
-                
-                preview_data["coordinates"][f"frame_{frame}"].append({
-                    "preview_id": i,
-                    "original_point_id": point_idx,
-                    "x": float(x),
-                    "y": float(y)
-                })
-                preview_data["visibility"][f"frame_{frame}"].append({
-                    "preview_id": i,
-                    "original_point_id": point_idx,
-                    "visible": vis > 0.5,
-                    "confidence": vis
-                })
-        
-        with open(preview_coords_file, 'w') as f:
-            json.dump(preview_data, f, indent=2)
-        
-        self.logger.info(f"Preview grid coordinates exported to: {preview_coords_file}")
-        
-        # Export CSV files for easier analysis
-        self._export_coordinates_csv(tracks_np, visibility_np, selected_point_indices, timestamp, reference_frame)
-    
     def get_reference_frame_image(self) -> Optional[np.ndarray]:
         """Get the reference frame image for mask drawing."""
         if self.current_video is None or self.reference_frame is None:
@@ -953,45 +845,6 @@ Root {
         
         return selected_indices.tolist()
     
-    def _export_coordinates_csv(self, tracks_np: np.ndarray, visibility_np: np.ndarray, 
-                               selected_indices: List[int], timestamp: str, reference_frame: int):
-        """Export coordinates in CSV format for easier analysis."""
-        import csv
-        
-        T, N, _ = tracks_np.shape
-        
-        # Export full coordinates CSV
-        full_csv_file = self.debug_dir / f"full_coords_{timestamp}.csv"
-        with open(full_csv_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['frame', 'point_id', 'x', 'y', 'visible', 'confidence', 'is_reference_frame'])
-            
-            for frame in range(T):
-                for point in range(N):
-                    x, y = tracks_np[frame, point]
-                    vis = float(visibility_np[frame, point])
-                    is_ref = frame == reference_frame
-                    
-                    writer.writerow([frame, point, f"{x:.2f}", f"{y:.2f}", 
-                                   vis > 0.5, f"{vis:.3f}", is_ref])
-        
-        # Export preview coordinates CSV
-        preview_csv_file = self.debug_dir / f"preview_coords_{timestamp}.csv"
-        with open(preview_csv_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['frame', 'preview_id', 'original_point_id', 'x', 'y', 'visible', 'confidence', 'is_reference_frame'])
-            
-            for frame in range(T):
-                for i, point_idx in enumerate(selected_indices):
-                    x, y = tracks_np[frame, point_idx]
-                    vis = float(visibility_np[frame, point_idx])
-                    is_ref = frame == reference_frame
-                    
-                    writer.writerow([frame, i, point_idx, f"{x:.2f}", f"{y:.2f}", 
-                                   vis > 0.5, f"{vis:.3f}", is_ref])
-        
-        self.logger.info(f"CSV coordinates exported to: {full_csv_file} and {preview_csv_file}")
-        
     def load_cotracker_model(self):
         """Load CoTracker model from torch hub."""
         try:
@@ -1618,8 +1471,7 @@ def create_gradio_interface():
             tracks, visibility = app.track_points(video, grid_size, app.reference_frame)
             app.tracking_results = (tracks, visibility)
             
-            # Export coordinate data for debugging
-            app.export_coordinates(tracks, visibility, grid_size, preview_downsample, app.reference_frame)
+            # Debug exports removed - only keeping essential Nuke CSV export
             
             # Calculate preview points from downsampling ratio
             # If grid_size=50 and downsample=4, show every 4th point -> 50/4 = ~12 points per axis

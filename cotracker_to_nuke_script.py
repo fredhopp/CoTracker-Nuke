@@ -118,9 +118,7 @@ def cotracker_to_nuke_tracker(csv_path, time_offset=0, enable_t=True, enable_r=F
             # Add new track
             tracker_node['add_track'].execute()
             
-            # Minimal printing - only every 10th track to avoid spam
-            if tracker_id % 10 == 0 or tracker_id == len(sorted(tracker_dict.keys())) - 1:
-                print(f"Processing track {tracker_id + 1}/{len(sorted(tracker_dict.keys()))}...")
+        # No printing in loops for performance
             
             # Calculate knob indices for this track (exact same as DL_Syn2Trackers)
             track_x_knob = tracker_id * columns + 2  # track_x column

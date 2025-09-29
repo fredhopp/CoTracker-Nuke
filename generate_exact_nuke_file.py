@@ -112,36 +112,36 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
         # Get sorted frames for this point
         sorted_frames = sorted(keyframes.keys())
         
+        # Find gaps to determine which frames need x-markers
+        frames_after_gaps = set()
+        for i in range(len(sorted_frames)):
+            frame = sorted_frames[i]
+            prev_frame = frame - 1
+            
+            # If previous frame is missing, this frame comes after a gap
+            if prev_frame not in keyframes and frame > 0:
+                frames_after_gaps.add(frame)
+                
+                # Also check if next frame is consecutive (both frames after same gap)
+                if i + 1 < len(sorted_frames):
+                    next_frame = sorted_frames[i + 1]
+                    if next_frame == frame + 1:
+                        frames_after_gaps.add(next_frame)
+        
         for frame in frame_range:
             if frame in keyframes:
                 x_val, y_val = keyframes[frame]
                 # Format numbers to match ground truth (remove unnecessary decimals)
                 x_str = f"{x_val:g}" if x_val != int(x_val) else str(int(x_val))
                 y_str = f"{y_val:g}" if y_val != int(y_val) else str(int(y_val))
-                x_values.append(x_str)
-                y_values.append(y_str)
-            else:
-                # Check if this is the start of a gap - if so, use x{next_frame} marker
-                # Find the next frame that has data
-                next_frame_with_data = None
-                for f in sorted_frames:
-                    if f > frame:
-                        next_frame_with_data = f
-                        break
                 
-                # Only add marker at the beginning of a gap sequence
-                prev_frame = frame - 1
-                if prev_frame in keyframes and next_frame_with_data is not None:
-                    # This is the first missing frame after a data frame
-                    x_values.append(f"x{next_frame_with_data}")
-                    y_values.append(f"x{next_frame_with_data}")
-                elif prev_frame not in keyframes and frame > 0:
-                    # This is a continuation of a gap - skip it
-                    continue
-                else:
-                    # Single missing frame or other case
+                # Add x-marker if this frame comes after a gap
+                if frame in frames_after_gaps:
                     x_values.append(f"x{frame}")
                     y_values.append(f"x{frame}")
+                
+                x_values.append(x_str)
+                y_values.append(y_str)
         
         x_curve = " ".join(x_values)
         y_curve = " ".join(y_values)

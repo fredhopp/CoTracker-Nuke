@@ -1470,7 +1470,7 @@ def create_gradio_interface():
             return None, f"Error loading video: {str(e)}"
     
     def select_reference_frame(reference_video, video_data):
-        """Select the current frame as reference frame."""
+        """Select the current frame as reference frame (simplified approach)."""
         app.logger.info(f"=== SELECT REFERENCE FRAME CALLED ===")
         app.logger.info(f"Reference video: {reference_video}")
         app.logger.info(f"Video data: {video_data}")
@@ -1479,45 +1479,44 @@ def create_gradio_interface():
         if reference_video is None or app.current_video is None:
             return "Please load a video first."
         
+        # For now, use middle frame as default since Gradio video time extraction is complex
         try:
-            # Try different ways to extract current time
-            current_time = None
+            middle_frame = app.current_video.shape[0] // 2
+            app.reference_frame = middle_frame
+            app.logger.info(f"Set reference frame to middle: {middle_frame}")
             
-            # Method 1: Check if video_data is a dict with time info
-            if isinstance(video_data, dict):
-                current_time = video_data.get('time') or video_data.get('currentTime')
-                app.logger.info(f"Dict method - current_time: {current_time}")
-            
-            # Method 2: Check if it's a tuple with time
-            elif isinstance(video_data, tuple) and len(video_data) >= 2:
-                current_time = video_data[1]
-                app.logger.info(f"Tuple method - current_time: {current_time}")
-            
-            # Method 3: Check if it's a list with time
-            elif isinstance(video_data, list) and len(video_data) >= 2:
-                current_time = video_data[1]
-                app.logger.info(f"List method - current_time: {current_time}")
-            
-            # Fallback: Use middle of video
-            if current_time is None:
-                current_time = app.current_video.shape[0] / 2 / 24  # Convert frames to seconds at 24fps
-                app.logger.info(f"Fallback method - current_time: {current_time}")
-            
-            # Convert time to frame index (assuming 24fps)
-            fps = 24
-            frame_idx = int(current_time * fps)
-            frame_idx = max(0, min(frame_idx, app.current_video.shape[0] - 1))
-            
-            app.reference_frame = frame_idx
-            app.logger.info(f"Set reference frame to: {frame_idx}")
-            
-            return f"Reference frame set to: Frame {frame_idx} (time: {current_time:.2f}s)"
+            return f"Reference frame set to middle of video: Frame {middle_frame} (total frames: {app.current_video.shape[0]})\nFor precise control, use the Manual Frame # input instead."
             
         except Exception as e:
             app.logger.error(f"Error selecting reference frame: {str(e)}")
-            # Emergency fallback - use frame 0
             app.reference_frame = 0
             return f"Error selecting reference frame: {str(e)}. Using frame 0 as fallback."
+    
+    def set_manual_reference_frame(frame_number):
+        """Set reference frame manually using frame number."""
+        app.logger.info(f"=== SET MANUAL REFERENCE FRAME CALLED ===")
+        app.logger.info(f"Frame number: {frame_number}")
+        
+        if app.current_video is None:
+            return "Please load a video first."
+        
+        try:
+            frame_number = int(frame_number)
+            max_frame = app.current_video.shape[0] - 1
+            
+            if frame_number < 0:
+                frame_number = 0
+            elif frame_number > max_frame:
+                frame_number = max_frame
+            
+            app.reference_frame = frame_number
+            app.logger.info(f"Manual reference frame set to: {frame_number}")
+            
+            return f"Reference frame manually set to: Frame {frame_number} (max: {max_frame})"
+            
+        except Exception as e:
+            app.logger.error(f"Error setting manual reference frame: {str(e)}")
+            return f"Error setting manual reference frame: {str(e)}"
     
     def process_video(reference_video, grid_size):
         """Process video and return tracking results."""
@@ -1596,6 +1595,16 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         except Exception as e:
             return f"Error processing video: {str(e)}", None
     
+    def handle_file_selection(selected_file):
+        """Handle file selection from FileExplorer."""
+        if selected_file:
+            # Ensure .nk extension
+            file_path = str(selected_file)
+            if not file_path.endswith('.nk'):
+                file_path += '.nk'
+            return file_path
+        return ""
+    
     def export_nuke_file(output_file_path, frame_offset):
         """Export tracking data to Nuke file."""
         if app.tracking_results is None:
@@ -1644,13 +1653,23 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                 
                 # Reference frame selection controls
                 gr.Markdown("### Reference Frame Selection")
-                reference_frame_info = gr.Textbox(
-                    label="Reference Frame Info", 
-                    value="No reference frame selected (will use frame 0)",
-                    interactive=False,
-                    lines=2
-                )
-                select_reference_btn = gr.Button("Select Current Frame as Reference", variant="secondary")
+                with gr.Row():
+                    reference_frame_info = gr.Textbox(
+                        label="Reference Frame Info", 
+                        value="No reference frame selected (will use frame 0)",
+                        interactive=False,
+                        lines=2,
+                        scale=3
+                    )
+                    manual_frame_input = gr.Number(
+                        label="Manual Frame #",
+                        value=0,
+                        minimum=0,
+                        scale=1
+                    )
+                with gr.Row():
+                    select_reference_btn = gr.Button("Use Middle Frame", variant="secondary")
+                    set_manual_frame_btn = gr.Button("Use Manual Frame #", variant="primary")
                 
                 # Mask drawing section
                 gr.Markdown("### Optional Mask Drawing")
@@ -1724,10 +1743,16 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                     value=1001,
                     info="Frame offset for image sequences (videos start at 0, but image sequences may start at different frame numbers)"
                 )
+                output_file_explorer = gr.FileExplorer(
+                    label="Select Output .nk File Location",
+                    root_dir=".",
+                    file_count="single",
+                    height=200
+                )
                 output_file_path = gr.Textbox(
-                    label="Output .nk File Path",
-                    placeholder="e.g., C:/Projects/my_tracking.nk",
-                    info="Full path where the .nk file should be saved"
+                    label="Selected Output Path",
+                    interactive=False,
+                    placeholder="No file selected"
                 )
             export_btn = gr.Button("Export to Nuke", variant="secondary")
             export_result = gr.Textbox(
@@ -1751,11 +1776,25 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             outputs=[reference_frame_info]
         )
         
+        # Set manual reference frame
+        set_manual_frame_btn.click(
+            fn=set_manual_reference_frame,
+            inputs=[manual_frame_input],
+            outputs=[reference_frame_info]
+        )
+        
         # Process video
         process_btn.click(
             fn=process_video,
             inputs=[reference_video, grid_size],
             outputs=[result_text, preview_video]
+        )
+        
+        # Handle file selection
+        output_file_explorer.change(
+            fn=handle_file_selection,
+            inputs=[output_file_explorer],
+            outputs=[output_file_path]
         )
         
         # Export to Nuke

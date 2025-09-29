@@ -1471,17 +1471,37 @@ def create_gradio_interface():
     
     def select_reference_frame(reference_video, video_data):
         """Select the current frame as reference frame."""
+        app.logger.info(f"=== SELECT REFERENCE FRAME CALLED ===")
+        app.logger.info(f"Reference video: {reference_video}")
+        app.logger.info(f"Video data: {video_data}")
+        app.logger.info(f"Video data type: {type(video_data)}")
+        
         if reference_video is None or app.current_video is None:
             return "Please load a video first."
         
         try:
-            # Extract current time from video data
-            # video_data is a tuple: (video_path, current_time)
-            if isinstance(video_data, tuple) and len(video_data) >= 2:
+            # Try different ways to extract current time
+            current_time = None
+            
+            # Method 1: Check if video_data is a dict with time info
+            if isinstance(video_data, dict):
+                current_time = video_data.get('time') or video_data.get('currentTime')
+                app.logger.info(f"Dict method - current_time: {current_time}")
+            
+            # Method 2: Check if it's a tuple with time
+            elif isinstance(video_data, tuple) and len(video_data) >= 2:
                 current_time = video_data[1]
-            else:
-                # Fallback: assume middle of video
+                app.logger.info(f"Tuple method - current_time: {current_time}")
+            
+            # Method 3: Check if it's a list with time
+            elif isinstance(video_data, list) and len(video_data) >= 2:
+                current_time = video_data[1]
+                app.logger.info(f"List method - current_time: {current_time}")
+            
+            # Fallback: Use middle of video
+            if current_time is None:
                 current_time = app.current_video.shape[0] / 2 / 24  # Convert frames to seconds at 24fps
+                app.logger.info(f"Fallback method - current_time: {current_time}")
             
             # Convert time to frame index (assuming 24fps)
             fps = 24
@@ -1489,11 +1509,15 @@ def create_gradio_interface():
             frame_idx = max(0, min(frame_idx, app.current_video.shape[0] - 1))
             
             app.reference_frame = frame_idx
+            app.logger.info(f"Set reference frame to: {frame_idx}")
             
             return f"Reference frame set to: Frame {frame_idx} (time: {current_time:.2f}s)"
             
         except Exception as e:
-            return f"Error selecting reference frame: {str(e)}"
+            app.logger.error(f"Error selecting reference frame: {str(e)}")
+            # Emergency fallback - use frame 0
+            app.reference_frame = 0
+            return f"Error selecting reference frame: {str(e)}. Using frame 0 as fallback."
     
     def process_video(reference_video, grid_size):
         """Process video and return tracking results."""
@@ -1700,10 +1724,10 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                     value=1001,
                     info="Frame offset for image sequences (videos start at 0, but image sequences may start at different frame numbers)"
                 )
-                output_file_picker = gr.File(
-                    label="Output .nk File Location",
-                    file_types=[".nk"],
-                    type="filepath"
+                output_file_path = gr.Textbox(
+                    label="Output .nk File Path",
+                    placeholder="e.g., C:/Projects/my_tracking.nk",
+                    info="Full path where the .nk file should be saved"
                 )
             export_btn = gr.Button("Export to Nuke", variant="secondary")
             export_result = gr.Textbox(
@@ -1737,7 +1761,7 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         # Export to Nuke
         export_btn.click(
             fn=export_nuke_file,
-            inputs=[output_file_picker, image_sequence_start_frame],
+            inputs=[output_file_path, image_sequence_start_frame],
             outputs=[export_result]
         )
         

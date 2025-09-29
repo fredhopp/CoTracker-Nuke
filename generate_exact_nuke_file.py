@@ -109,15 +109,39 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
         x_values = []
         y_values = []
         
+        # Get sorted frames for this point
+        sorted_frames = sorted(keyframes.keys())
+        
         for frame in frame_range:
             if frame in keyframes:
                 x_val, y_val = keyframes[frame]
-                x_values.append(str(x_val))
-                y_values.append(str(y_val))
+                # Format numbers to match ground truth (remove unnecessary decimals)
+                x_str = f"{x_val:g}" if x_val != int(x_val) else str(int(x_val))
+                y_str = f"{y_val:g}" if y_val != int(y_val) else str(int(y_val))
+                x_values.append(x_str)
+                y_values.append(y_str)
             else:
-                # Use 'x{frame}' marker for missing frames (like in ground truth)
-                x_values.append(f"x{frame}")
-                y_values.append(f"x{frame}")
+                # Check if this is the start of a gap - if so, use x{next_frame} marker
+                # Find the next frame that has data
+                next_frame_with_data = None
+                for f in sorted_frames:
+                    if f > frame:
+                        next_frame_with_data = f
+                        break
+                
+                # Only add marker at the beginning of a gap sequence
+                prev_frame = frame - 1
+                if prev_frame in keyframes and next_frame_with_data is not None:
+                    # This is the first missing frame after a data frame
+                    x_values.append(f"x{next_frame_with_data}")
+                    y_values.append(f"x{next_frame_with_data}")
+                elif prev_frame not in keyframes and frame > 0:
+                    # This is a continuation of a gap - skip it
+                    continue
+                else:
+                    # Single missing frame or other case
+                    x_values.append(f"x{frame}")
+                    y_values.append(f"x{frame}")
         
         x_curve = " ".join(x_values)
         y_curve = " ".join(y_values)

@@ -275,7 +275,7 @@ ypos 57
 
 if __name__ == "__main__":
     # Configuration
-    csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_171202.csv"
+    csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_175832.csv"
     image_height = 1080
     min_confidence = 0.5
     

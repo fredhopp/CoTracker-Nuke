@@ -1752,6 +1752,16 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             height=400  # 2/3 the default size
         )
         
+        # Output file selection - full width like preview
+        gr.Markdown("## Export to Nuke")
+        with gr.Row():
+            output_file_path = gr.Textbox(
+                label="Output .nk File Path",
+                placeholder="C:/Projects/my_tracking.nk",
+                scale=5
+            )
+            browse_btn = gr.Button("Browse...", scale=1)
+        
         with gr.Row():
             with gr.Column():
                 image_sequence_start_frame = gr.Number(
@@ -1759,19 +1769,14 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                     value=1001,
                     info="Frame offset for image sequences (videos start at 0, but image sequences may start at different frame numbers)"
                 )
-                with gr.Row():
-                    output_file_path = gr.Textbox(
-                        label="Output .nk File Path",
-                        placeholder="C:/Projects/my_tracking.nk",
-                        scale=4
-                    )
-                    browse_btn = gr.Button("Browse...", scale=1, size="sm")
-            export_btn = gr.Button("Export to Nuke", variant="secondary")
-            export_result = gr.Textbox(
-                label="Export Status", 
-                lines=3, 
-                interactive=False
-            )
+            with gr.Column():
+                export_btn = gr.Button("Export to Nuke", variant="primary", size="lg")
+            with gr.Column():
+                export_result = gr.Textbox(
+                    label="Export Status", 
+                    lines=3, 
+                    interactive=False
+                )
         
         # Event handlers
         # Load video for reference frame selection (now using reference_video directly)

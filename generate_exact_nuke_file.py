@@ -165,25 +165,7 @@ def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_
     # Note: translate and center curves removed as per user request
     
     # Generate complete .nk file content matching exact structure
-    nk_content = f'''Root {{
-inputs 0
-name {output_path}
-frame {min_frame}
-format "2048 1556 0 0 2048 1556 1 2K_Super_35(full-ap)"
-proxy_type scale
-proxy_format "1024 778 0 0 1024 778 1 1K_Super_35(full-ap)"
-colorManagement Nuke
-OCIO_config aces_1.2
-workingSpaceLUT linear
-monitorLut sRGB
-monitorOutLUT rec709
-int8Lut sRGB
-int16Lut sRGB
-logLut Cineon
-floatLut linear
-}}
-Tracker4 {{
-inputs 0
+    nk_content = f'''Tracker4 {{
 tracks {{ {{ 1 31 {num_tracks} }} 
 {{ {{ 5 1 20 enable e 1 }} 
 {{ 3 1 75 name name 1 }} 
@@ -226,8 +208,8 @@ reference_frame {reference_frame + frame_offset}
 selected_tracks {num_tracks - 1}
 name {tracker_node_name}
 selected true
-xpos 191
-ypos 57
+xpos 0
+ypos 0
 }}
 '''
     
@@ -235,30 +217,63 @@ ypos 57
     with open(output_path, 'w') as f:
         f.write(nk_content)
     
-    print(f"SUCCESS: Generated {output_path}")
+    # Convert to absolute path with forward slashes
+    absolute_path = os.path.abspath(output_path).replace('\\', '/')
+    
+    print(f"SUCCESS: Generated {absolute_path}")
     print(f"   {num_tracks} tracks with {total_rows - filtered_rows} total keyframes")
     print(f"   Frame range: {min_frame}-{max_frame}")
     print(f"   Reference frame: {reference_frame + frame_offset}")
     print(f"   Ready to load in Nuke!")
     print()
     
-    return output_path
+    return absolute_path
 
 if __name__ == "__main__":
-    # Configuration
-    csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_214434.csv"
-    image_height = 1080
-    min_confidence = 0.5
+    import sys
     
-    # Generate exact .nk file
-    output_file = generate_exact_nuke_file(
-        csv_path=csv_path,
-        image_height=image_height,
-        min_confidence=min_confidence
-    )
-    
-    if output_file:
-        print(f"TO USE:")
-        print(f"   1. Open Nuke")
-        print(f"   2. File > Open > {output_file}")
-        print(f"   3. Tracker4 node will be loaded with exact structure match")
+    # Check if command line arguments are provided
+    if len(sys.argv) >= 4:
+        # Called from modular app with arguments: csv_path, output_path, frame_offset, reference_frame
+        csv_path = sys.argv[1]
+        output_path = sys.argv[2] 
+        frame_offset = int(sys.argv[3])
+        reference_frame = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+        
+        # Default configuration
+        image_height = 1080
+        min_confidence = 0.5
+        
+        # Generate exact .nk file
+        output_file = generate_exact_nuke_file(
+            csv_path=csv_path,
+            output_path=output_path,
+            image_height=image_height,
+            min_confidence=min_confidence,
+            frame_offset=frame_offset,
+            reference_frame=reference_frame
+        )
+        
+        if output_file:
+            # Return the absolute path for the calling script
+            print(output_file)
+        else:
+            sys.exit(1)
+    else:
+        # Legacy mode - hardcoded configuration for manual testing
+        csv_path = "Z:/Dev/Cotracker/temp/full_coords_20250928_214434.csv"
+        image_height = 1080
+        min_confidence = 0.5
+        
+        # Generate exact .nk file
+        output_file = generate_exact_nuke_file(
+            csv_path=csv_path,
+            image_height=image_height,
+            min_confidence=min_confidence
+        )
+        
+        if output_file:
+            print(f"TO USE:")
+            print(f"   1. Open Nuke")
+            print(f"   2. File > Open > {output_file}")
+            print(f"   3. Tracker4 node will be loaded with exact structure match")

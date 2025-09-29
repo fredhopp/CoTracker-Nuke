@@ -1,0 +1,941 @@
+﻿----------------------- Page 1-----------------------
+
+                  COTRACKER 3: SIMPLER AND  BETTER  POINT 
+                  TRACKING BY  PSEUDO-LABELLING  REAL  VIDEOS 
+
+                        Nikita Karaev1,2   Iurii Makarov1   Jianyuan Wang1,2    Natalia Neverova1 
+                                       Andrea Vedaldi1    Christian Rupprecht2 
+
+                                 1 Meta AI    2  Visual Geometry Group, University of Oxford 
+                                         https://cotracker3.github.io 
+                                             nikita@robots.ox.ac.uk 
+
+  4 
+  2 
+  0 
+  2 
+    
+t 
+ c 
+O 
+    
+  5 
+  1 
+    
+    
+] 
+V 
+C 
+  . 
+ s 
+ c 
+[ 
+    
+    
+  1 
+ v 
+  1               Figure 1:  Scaling point trackers using unsupervised videos. Left:  We compare our CoTracker3, 
+  3               LocoTrack, CoTracker, BootsTAPIR and TAPIR. Each model is pre-trained on synthetic data (from 
+  8               Kubric) and then fine-tuned on real videos using our new, simple protocol for unsupervised training. 
+  1               Our new model and training protocol outperform SoTA by a large margin using only 0.1% of the 
+  1 
+  .               training data. Right: The new model is particularly robust to occlusions. 
+  0 
+  1                                                 ABSTRACT 
+  4 
+  2 
+ :                       Most state-of-the-art point trackers are trained on synthetic data due to the diffi- 
+ v                       culty of annotating real videos for this task. However, this can result in suboptimal 
+i                        performance due to the statistical gap between synthetic and real videos. In or- 
+X                        der to understand these issues better, we introduce CoTracker3, comprising a new 
+ r 
+ a                       tracking model and a new semi-supervised training recipe. This allows real videos 
+                         without annotations to be used during training by generating pseudo-labels using 
+                         off-the-shelf teachers.  The new model eliminates or simplifies components from 
+                         previous trackers, resulting in a simpler and often smaller architecture. This train- 
+                         ing scheme is much simpler than prior work and achieves better results using 1,000 
+                         times less data.  We further study the scaling behaviour to understand the impact 
+                         of using more real unsupervised data in point tracking. The model is available in 
+                         online and offline variants and reliably tracks visible and occluded points. 
+
+                  1   INTRODUCTION 
+
+                  Tracking  points  is  a  key  step  in  the  analysis  of  videos, particularly  for  tasks  like  3D  recon- 
+                  struction and video editing that require precise recovery of correspondences. Point trackers have 
+                  evolved significantly in recent years, with designs based on transformer neural networks inspired by 
+                  PIPs (Harley et al., 2022).  Notable examples include TAP-Vid (Doersch et al., 2022), which intro- 
+                  duced a new benchmark for point tracking, and TAPIR (Doersch et al., 2023), which introduced an 
+
+                                                          1 
+
+----------------------- Page 2-----------------------
+
+improved tracker that extends PIPs’ design with a global matching stage. CoTracker (Karaev et al., 
+2024) proposed a transformer architecture that tracks multiple points jointly, with further gains in 
+tracking quality, particularly for points partially occluded in the video. 
+
+In this paper,  we introduce a new point tracking model,  CoTracker3,  that builds on the ideas of 
+recent trackers but is significantly simpler, more data efficient, and more flexible. Our architecture, 
+in particular, removes some components that recent trackers proposed as necessary for good perfor- 
+mance while still improving on the state-of-the-art.  For the first time, we also investigate the data 
+scaling behaviour of a point tracker and show the advantages of different model architectures and 
+training protocols in terms of final tracking quality and data efficiency. 
+
+The excellent performance of recent trackers is due to the ability of high-capacity neural networks 
+to learn a robust prior from a large number of training videos and use this prior for tackling complex 
+and ambiguous tracking cases, such as occlusions and fast motion.           Therefore, the availability of 
+high-quality training data is of crucial importance in obtaining solid tracking results. 
+
+While, in principle, there is no shortage of videos that could be used to train point trackers, it is 
+difficult to manually annotate them with point tracks (Doersch et al., 2022).  Fortunately, synthetic 
+videos (Greff et al., 2022), which can be annotated automatically, have been found to be a good 
+substitute for real data for low-level tasks like point tracking (Harley et al., 2022).  Still, a diverse 
+collection of synthetic videos is expensive at scale, and the sim-to-real gap is not entirely negligible. 
+Hence, using real videos to train point trackers remains an attractive option. 
+
+Recent works have thus explored utilizing large collections of real but unlabelled videos to train 
+point trackers. BootsTAPIR (Doersch et al., 2024), in particular, has recently achieved state-of-the- 
+art accuracy on the TAP-Vid benchmark by training a model on 15 million unlabelled videos. While 
+the benefits of using more training data have thus been demonstrated, the data scaling behaviour of 
+point trackers is not well understood. In particular, it is unclear if the millions of real training videos 
+used in BootsTAPIR are necessary to train a good tracker.  The same can be said about the benefits 
+of their relatively complex semi-supervised training recipe. 
+
+Another largely unexplored aspect is the competing designs of different trackers.  Transformer ar- 
+chitectures like PIPs (Harley et al., 2022), TAPIR (Doersch et al., 2023), and CoTracker (Karaev 
+et al., 2024), as well as more recent contributions like LocoTrack (Cho et al., 2024), propose each 
+significant changes, extensions, new components, and different design decisions.           While these are 
+shown to help in the respective papers, it is less clear if they are all essential or whether these designs 
+can be simplified and made more efficient. 
+
+CoTracker3 contributes to answering these questions.         Our model is based on a simpler architec- 
+ture and training protocols than recent trackers such as BootsTAPIR and LocoTrack. It outperforms 
+BootsTAPIR by a significant margin on the TAP-Vid and Dynamic Replica (Karaev et al., 2023) 
+benchmarks while using three orders of magnitude fewer unlabelled videos and a simpler training 
+protocol than BootsTAPIR.  We also study the data scaling behaviour of this model under increas- 
+ingly more real training videos. LocoTrack benefits in a similar manner to CoTracker3 from scaling 
+data but cannot track occluded points well. 
+
+CoTracker3 borrows elements from prior models, including iterative updates and convolutional fea- 
+tures from PIPs, cross-track attention for joint tracking, virtual tracks for efficiency, and unrolled 
+training for windowed operation from CoTracker, as well as the 4D correlation from LocoTrack. At 
+the same time, it significantly simplifies some of these components and removes others, such as the 
+global matching stage of BootsTAPIR and LocoTrack. This helps to identify which components are 
+really important for a good tracker. CoTracker3’s architecture is also flexible as it can operate both 
+offline (i.e., single window) and online (i.e., sliding window) if trained in the same way. 
+
+2    RELATED WORK 
+
+Tracking-Any-Point.        The task of tracking any point was introduced by PIPs (Harley et al., 2022), 
+who revisited the classic Particle Video (Sand & Teller, 2008) method and proposed to use deep 
+learning for point tracking.    Inspired by RAFT (Teed & Deng, 2020),  an optical flow algorithm, 
+PIPs extracts correlation maps between frames and feeds them into a network to refine the track 
+estimates. TAP-Vid (Doersch et al., 2022) improved problem framing, proposed three benchmarks, 
+
+                                                     2 
+
+----------------------- Page 3-----------------------
+
+and TAP-Net, a model for point tracking.         TAPIR (Doersch et al., 2023) combined TAP-Net-like 
+global matching with PIPs, resulting in a much-improved performance.  (Zheng et al., 2023) intro- 
+duced another synthetic benchmark, PointOdyssey, and PIPs++, an improved version of PIPs that 
+can track points over extended durations. CoTracker (Karaev et al., 2024) noted a strong correlation 
+between different tracks, which can be exploited to improve tracking, particularly behind occlusions 
+and out-of-frame.     (Le Moing et al., 2024) further improved CoTracker by densifying its output. 
+VGGSfM (Wang et al., 2024) proposed a coarse-to-fine tracker design where tracks are validated 
+through 3D reconstruction, but it only targets static scenes. Inspired by DETR (Carion et al., 2020), 
+(Li et al., 2024) introduced TAPTR, an end-to-end transformer architecture for point tracking, rep- 
+resenting points as queries in the transformer decoder.  LocoTrack (Cho et al., 2024) extended 2D 
+correlation features to 4D correlation volumes while simplifying the point-tracking pipeline and en- 
+hancing efficiency.    Our work proposes a further simplified framework that runs 27% faster than 
+LocoTrack, maintaining the ability to track occluded points via joint tracking, like CoTracker. 
+
+Annotating  data  for  point  tracking  is  particularly  challenging  due  to  the  required  precision:  the 
+annotation should have (at least) pixel-level accuracy.       The prevailing paradigm in point tracking 
+is thus to train models using synthetic data, where such annotations can be obtained automatically 
+and without errors,  and show that the resulting models generalize to real data.            All the methods 
+mentioned above follow this paradigm, and most are trained solely on Kubric (Greff et al., 2022). 
+
+Semi-supervised correspondence.           An alternative to synthetic data is unlabelled real data in com- 
+bination  with  unsupervised  or  semi-supervised  learning.      For  example,  one  can  use  photometric 
+consistency as a proxy for correspondences. Such training is well suited for optical flow and dense 
+tracking but often leads to false matches due to occlusions, repeated textures, or lighting changes. 
+Therefore  it  usually  requires  multi-frame  estimates  (Janai  et  al., 2018),  explicit  reasoning  about 
+occlusions (Wang et al., 2018),  hand-crafted loss terms (Liu et al., 2019b; Meister et al., 2018), 
+or various data augmentation strategies (Liu et al., 2020).        Alternatively,  one can use an existing 
+tracker to train another in a process akin to distillation (Liu et al., 2019a).       More robust unsuper- 
+vised learning signals for long-range tracking can be obtained via simple colorization of gray-scale 
+videos by copying colors from the reference frame (Vondrick et al., 2018) or utilizing richer visual 
+patterns (Lai et al., 2020). 
+
+Accounting  for  cycle  consistency  (Wang  et  al.,  2019;  Jabri  et  al.,  2020)  or  temporal  continu- 
+ity  (Foldiak,¨ ´ 1991; Wiskott  &  Sejnowski,  2002)  in  videos  is  another  way  to  obtain  a  reliable 
+proxy signal to learn correspondences without full supervision,  or even learn generic visual fea- 
+tures (Goroshin et al., 2015; Wang & Gupta, 2015).  Recently, (Sun et al., 2024) proposed refining 
+PIPs and RAFT on a pre-generated dataset with pseudo-labels using color constancy and cycle con- 
+sistency signals. This pipeline improves tracking, but performance quickly saturates. 
+
+Most relevant to our work, BootsTAPIR Doersch et al. (2024) improved TAPIR trained on Kubric by 
+fine-tuning it on 15 million real videos using self-training while retaining a small synthetic dataset 
+with ground-truth supervision to avoid catastrophic forgetting.         They proposed applying augmen- 
+tations to student predictions and trained the model with an exponential moving average (EMA) 
+while computing three different loss masks for robustness. In contrast, our approach uses a simpler 
+design which does not require augmentations, masks, or EMA for training.               We also do not need 
+ground-truth supervised data during self-supervised finetuning. Instead, our idea is to train a student 
+model by utilizing existing trackers with complementary qualities as teachers.           We also show that 
+this protocol only requires a small fraction of the real videos utilized in BootsTAPIR. 
+
+3    METHOD 
+
+In this section, we formally introduce the task of point tracking and then outline the proposed Co- 
+Tracker3 architecture and the semi-supervised training pipeline we use to train it. 
+Given  a  video   (I  )T  ,  which  is  a  sequence  of  T  frames  I    ∈  R3 ×H ×W ,  and  a  query  point 
+                    t t=1                                             t 
+        q    q   q       3         q                                            q   q 
+Q = (t    , x , y  ) ∈ R  where t    indicates the query frame index and (x       , y  ) represents the initial 
+                                                                                                            2 
+location of the query point, our goal is to predict the corresponding point track Pt       = (x  , y  ) ∈ R  ,t t 
+                                       q   q 
+t = 1, . . . , T , with (xtq , ytq ) = (x , y  ). As is common in modern point tracking models (Doersch 
+et al., 2023; Karaev et al., 2024), CoTracker3 also estimates visibility Vt         ∈  [0, 1] and confidence 
+Ct  ∈  [0, 1]. Visibility shows whether the tracked point is visible (Vt       =  1) or occluded  (Vt   =  0) 
+
+                                                      3 
+
+----------------------- Page 4-----------------------
+
+in the current frame, while confidence measures whether the network is confident that the tracked 
+point is within a certain distance from the ground truth in the current frame  (Ct             = 1).  The model 
+initializes all tracks with query coordinates Pt      := (xtq , ytq ), t = 1, . . . , T , confidence and visibility 
+with zeros Ct   := 0, Vt   := 0, then updates all of them iteratively. 
+
+3.1    TRAINING USING UNLABELLED VIDEOS 
+
+Recent trackers are trained primarily on synthetic data (Greff et al., 2022) due to the challenge of 
+annotating real data for this problem at scale.          However,  BootsTAPIR (Doersch et al., 2024) has 
+shown that it is possible to train better trackers by adding to the mix unlabelled real videos. In order 
+to do so, they propose a sophisticated self-training protocol that uses a large number of unlabelled 
+videos (15M), self-training, data augmentations, and transformation equivariance. 
+
+Here, we propose a much simpler protocol that allows us to surpass the performance of (Doersch 
+et al., 2024) with 1,000 × less data: we use a variety of existing trackers to label a collection of real 
+videos, using them as teachers, and then use the pseudo-labels to train a new student model, which 
+we pre-train utilizing synthetic data. 
+
+Importantly, the teacher models are also trained using the same synthetic data only.  One may thus 
+wonder why this protocol should result in a student being better than any of the teachers. There are 
+several reasons for this: (1) the student benefits from learning from a much larger (noisy) dataset than 
+the synthetic data alone; (2) learning from real videos mitigates the distribution shifts between syn- 
+thetic and real data; (3) there is an ensembling/voting effect which reduces the pseudo-annotations 
+noise; (4) the student model may inherit the strengths of the different teachers, which may excel in 
+different aspects of the task (e.g., offline trackers track occluded points better and online trackers 
+tend to stick to the query points more closely near the track’s origin). 
+
+Dataset.     In order to enable such training, we collected a large-scale dataset of Internet-like videos 
+(around 100,000 videos of 30 seconds each) featuring diverse scenes and dynamic objects, primarily 
+humans and animals.        We demonstrate that performance improves when training on increasingly 
+larger subsets of this data, starting from as few as 100 videos (see Figure 1). 
+
+Teacher models.        To create a diverse set of supervisory signals, we employ multiple teacher mod- 
+els trained only on synthetic data from Kubric (Greff et al., 2022).  Our set of teachers consists of 
+our proposed models CoTracker3 online and CoTracker3 offline, CoTracker (Karaev et al., 2024), 
+and TAPIR (Doersch et al., 2023).          During training, we randomly and uniformly sample a frozen 
+teacher model for every batch (meaning that it is likely that, over several epochs, the same video 
+will receive pseudo-labels from different teachers), which helps to prevent over-fitting and promotes 
+generalization. The teacher models are not updated during training. 
+
+Query point sampling.          Trackers require a query point to track in addition to a video.  After ran- 
+domly choosing a teacher for the current batch, we sample a set of query points for each video.  To 
+select such queries, we use the SIFT detector (Lowe, 1999) sampling, biasing the selection of points 
+                                                                                                          ˆ 
+to those which are “good to track” (Shi & Tomasi, 1994). Specifically, we randomly select T frames 
+across a video and apply SIFT to generate points to start tracks on these keyframes.  Our intuition 
+behind using a feature extractor is guided by its ability to detect descriptive image features when- 
+ever possible while failing to do so when meeting ambiguous cases.  We hypothesise that this will 
+serve as a filter for hard-to-track points and will thus improve the stability of training.             Following 
+this intuition, if SIFT fails to produce a sufficient number of points for any frame, we skip the video 
+completely during training to maintain the quality of our training data. 
+
+Supervision.      We supervise tracks predicted by the student model with the same loss used to pre- 
+train the model on synthetic data, with only minor modifications for handling occlusion and tracking 
+confidence. These details are given later in Section 3.3. 
+
+3.2    COTRACKER 3 MODEL 
+
+We provide two model versions of CoTracker3:               offline and online.     The online version operates 
+in a sliding window manner, processing the input video sequentially and tracking points forward- 
+only. In contrast, the offline version processes the entire video as a single sliding window, enabling 
+
+                                                         4 
+
+----------------------- Page 5-----------------------
+
+Figure 2: Architecture. We compute convolutional features for every frame of the given video, and 
+then the correlations between the feature sampled around the query frame for the query point and 
+all the other frames. We then iteratively update tracks P (m)  = P (m) + ∆P (m+1), confidence C (m), 
+and visibility V (m)  with a transformer that takes the previous estimates P (m), C (m), V (m)  as input. 
+
+point tracking in both forward and backward directions.  The offline version tracks occluded points 
+better and also improves the long-term tracking of visible points.  However, the maximum number 
+of tracked frames is memory-bound, while the online version can track in real-time indefinitely. 
+
+Feature maps.         We start by computing dense  d-dimensional feature maps with a convolutional 
+neural network for each video frame, i.e.,  Φt            =  Φ(I  ), t  =  1, . . . , T .t We downsample the input 
+                                                                     d ×H  × W 
+video by a factor of k = 4 for efficiency so that Φt            ∈ R      k    k , and compute the feature maps at 
+                                    s      d ×   H    ×   W 
+S = 4 different scales, i.e., Φt      ∈ R      k2s−1    k2s−1  , s = 1, . . . , S. 
+
+                                                                                                              q    q   q 
+4D correlation features.          In order to allow the network to locate the query point Q = (t                , x , y  ) 
+in frames t = 1, . . . , T , we compute the correlation between the feature vectors extracted from the 
+                                    q                                         q    q 
+map Φtq     at the query frame t       around the query coordinates (x          , y  ) and feature vectors extracted 
+from maps Φ , t = 1, . . . , T around current track estimates Pt           t = (x  , y  ) at the other frames.t t 
+
+More specifically, every point Pt  is described by extracting a square neighbourhood of feature vec- 
+tors at different scales. We denote this collection of feature vectors as: 
+           s     h  s   x         y                                  i       d ×(2∆+1)2 
+         ϕt  =    Φt        + δ,       + δ    :  δ ∈ Z,  ∥δ ∥∞    ≤ ∆     ∈ R               ,   s = 1, . . . , S,     (1) 
+                        ks         ks 
+where the feature map Φs  is sampled using bilinear interpolation around the point (x  , y  ).  There- 
+                               t                                                                         t   t 
+fore, for each scale s, ϕs  contains a grid of (2∆ + 1)2 pointwise d-dimensional features. 
+                             t 
+                                                                     s    s                 s   ⊤   s       (2∆+1)4 
+Next, we define the 4D correlation (Cho et al., 2024) ⟨ϕ q , ϕ  ⟩ = stack((ϕ q )                  ϕ  ) ∈ R            for 
+                                                                     t    t                 t      t 
+every scale s = 1, . . . , S. Intuitively, this operation compares each feature vector around the query 
+           q   q 
+point  (x   , y  ) to each feature vector around the track point  (x  , y  ),  which the network uses to 
+                                                                                t   t 
+predict the track update. Before passing them to the transformer, we project these correlations with 
+a multi-layer perceptron (MLP) to reduce their dimensionality, defining the correlation features to 
+                             1     1                    S     S         pS 
+be: Corrt    =    MLP(⟨ϕ q , ϕ  ⟩), . . . , MLP(⟨ϕ q , ϕ        ⟩)  ∈ R     , where p is the projection dimension. 
+                             t     t                    t     t 
+This MLP architecture is much simpler than the ad-hoc module used by LocoTrack (Cho et al., 2024) 
+for computing their correlation features. 
+
+Iterative updates.        We initialize the confidence Ct  and visibility Vt  with zeros, and the tracks Pt 
+for all the times t = 1, . . . , T with the initial coordinates from the query point Q. We then iteratively 
+update all these quantities with a transformer. 
+
+At every iteration, we embed the tracks using the Fourier Encoding of the per-frame displacements, 
+i.e.,  ηt→t+1    =   η (Pt+1   − P ).,  Then,  we  concatenate  the  track  embeddings  (in  both  directionst 
+ηt→t+1    and ηt−1→t), confidence C  , visibility V , and the 4D correlations Corrt t               t for every query 
+                             i       i          i          i   i        i     i 
+point i  =  1, . . . , N :  G  =     η        , η        , C  , V  , Corr   . G   forms a grid of input tokens for 
+                             t        t−1→t      t→t+1     t    t        t      t 
+
+the transformer that span time T  and the number of query points N .  The transformer Ψ takes this 
+grid as input, adds standard Fourier time embeddings, and applies factorized time attention with t = 
+
+                                                            5 
+
+----------------------- Page 6-----------------------
+
+1, . . . , T and group attention with i = 1, . . . , N . It also uses proxy tokens (Karaev et al., 2024) for 
+efficiency. This transformer estimates the updates to tracks, confidence, and visibility incrementally 
+as  (∆P , ∆C , ∆V )  =  Ψ(G). We update tracks P , confidence C  and visibility V  M  times, where: 
+P (m+1)  = P (m) + ∆P (m+1) ; C (m+1)  = C (m) + ∆C (m+1) ; V (m+1)  = V (m) + ∆V (m+1) . Note that 
+we resample the pointwise features ϕ around updated tracks P (m+1)  and recompute the correlations 
+Corr after every update. 
+
+3.3    MODEL TRAINING 
+
+We supervise both visible and occluded tracks using the Huber loss with a threshold of 6 and expo- 
+nentially increasing weights. We assign a smaller weight to the loss term for occluded points: 
+
+                                        M 
+                    Ltrack (P , P ⋆ ) =  X γ M −m (1occ /5 + 1vis ) Huber(P (m) , P ⋆ ),                     (2) 
+
+                                       m=1 
+
+where γ = 0.8 is a discount factor. This prioritises tracking well the visible points. 
+
+Confidence and visibility are supervised with a Binary Cross Entropy (BCE) loss at every iterative 
+update. The ground truth for confidence is defined by an indicator function that checks whether the 
+predicted track is within  12 pixels of the ground truth track for the current update.           We apply the 
+sigmoid function to the predicted confidence and visibility before computing the loss: 
+
+                                      M 
+                               ⋆     X      M −m             (m)        (m)       ⋆          
+               Lconf (C , P , P ) =       γ       CE    σ (C     ), 1  ∥P     − P   ∥2  < 12    ,            (3) 
+
+                                     m=1 
+
+                                      M 
+                   Loccl (V , V⋆ ) =  X γ M −m CE(σ (V (m)), V⋆ ).                                           (4) 
+
+                                     m=1 
+
+Training using pseudo-labels.         When using pseudo-labelled videos, we supervise CoTracker3 us- 
+ing the same loss (2) used for the synthetic data, but found it more stable not to supervise confidence 
+and visibility.  To avoid forgetting the latter predictions, we use a separate linear layer to estimate 
+confidence and visibility and simply freeze it at this training stage. 
+
+Online model.       Both online and offline versions of CoTracker3 have the same architecture.              The 
+main  difference  between  them  is  the  way  of  training.    The  online  version  processes  videos  in  a 
+windowed manner:       it takes T ′ frames as input, predicts tracks for them, then moves forward by 
+
+  ′ 
+T  /2 frames, and repeats this process. It uses the overlapped predictions for the tracks, confidence, 
+and visibility from the previous sliding window as initialization for the current window. 
+
+During training, we compute the same losses (2) to (4) for the online version separately for each 
+sliding window.  Then, we take the mean across all the sliding windows.  Since the online version 
+can track points only forward in time, we compute the losses only starting from the first window 
+with the query frame tq  onwards. For the offline version, however, we compute the losses for every 
+frame because it tracks points in both directions. We train the online version on videos of the same 
+length,  while the offline version needs to see videos of different lengths during training to avoid 
+overfitting to a specific length. With this intuition in mind, for the offline version, we randomly trim 
+a video between T/2 and T  frames and linearly interpolate time embeddings during training. 
+
+3.4    DISCUSSION 
+
+Our model includes several simplifications and improvements compared to previous architectures 
+like PIPs, TAPIR and CoTracker. In particular: (1) The model uses the idea of 4D correlation from 
+LocoTrack but is further simplified by utilizing a simple MLP to process the correlation features 
+instead of their ad-hoc architecture; (2) It estimates confidence for every tracked point; (3) Com- 
+pared to CoTracker, the grid of tokens G is simplified, using only correlation features and Fourier 
+embeddings of displacements; (4) The visibility flags are updated at each iteration along with other 
+quantities instead of using a separate network.        (5) Compared to TAPIR, BootsTAPIR and Loco- 
+Track, CoTracker3 does not use a global matching module as we found it redundant. 
+
+A benefit of these simplifications is that CoTracker3 is considerably leaner and faster than other sim- 
+ilar trackers. Specifically, CoTracker3 has 2 × fewer parameters than CoTracker, while the absence 
+
+                                                       6 
+
+----------------------- Page 7-----------------------
+
+                                                         Kinetics             RGB-S               DAVIS         Mean 
+ Method                                Train 
+                                                    AJ ↑  δvis ↑  OA ↑  AJ ↑  δvis ↑  OA ↑  AJ ↑  δvis ↑  OA↑  δvis  ↑ 
+                                                           avg                 avg                  avg          avg 
+
+ PIPs++ (Zheng et al., 2023)           PO            —     63.5    —     —     58.5    —     —     73.7    —     65.2 
+ TAPIR (Doersch et al., 2023)          Kub          49.6   64.2   85.0  55.5   69.7   88.0  56.2   70.0   86.5   68.0 
+ CoTracker (Karaev et al., 2024)       Kub          49.6   64.3   83.3  67.4   78.9   85.2  61.8   76.1   88.3   73.1 
+ TAPTR (Li et al., 2024)               Kub          49.0   64.4   85.2  60.8   76.2   87.0  63.0   76.1   91.1   72.2 
+ LocoTrack (Cho et al., 2024)          Kub          52.9   66.8   85.3  69.7   83.2   89.5  62.9   75.3   87.2   75.1 
+ CoTracker3 (Ours, online)             Kub          54.1   66.6   87.1  71.1   81.9   90.3  64.5   76.7   89.7   75.1 
+ CoTracker3 (Ours, offline)            Kub          53.5   66.5   86.4  74.0   84.9   90.5  63.3   76.2   88.0   75.9 
+
+ BootsTAPIR (Doersch et al., 2024)  Kub+15M         54.6   68.4   86.5  70.8   83.0   89.9   61.4  73.6   88.7   75.0 
+ CoTracker3 (Ours, online)             Kub+15k      55.8   68.5   88.3  71.7   83.6   91.1  63.8   76.3   90.2   76.1 
+ CoTracker3 (Ours, offline)            Kub+15k      54.7   67.8   87.4  74.3   85.2   92.4  64.4   76.9   91.2   76.6 
+
+Table  1:     TAP-Vid  benchmarks  CoTracker3  trained  on  synthetic  Kubric  shows  strong  perfor- 
+mance compared to other models, while the online version fine-tuned on 15k additional real videos 
+(Kub+15k)  outperforms  all  the  other  methods,  even  BootsTAPIR  trained  on  1,000 × more  real 
+videos. Training data: (Kub) Kubric (Greff et al., 2022), (PO) Point Odyssey (Zheng et al., 2023). 
+
+of global matching and the use of an MLP to process correlations makes CoTracker3 27% faster 
+than the fastest tracker (LocoTrack) despite cross-track attention. 
+
+4     EXPERIMENTS 
+
+In this section, we describe our evaluation protocol. Then, we compare our online and offline models 
+to state-of-the-art trackers (Section 4.1), analyse their performance for occluded points (Section 4.1), 
+show  how  different  models  scale  with  the  proposed  pseudo-labeling  pipeline  (Section 4.2),  and 
+ablate the design choices of the architecture and the scaling pipeline (Section 4.3). 
+
+Evaluation  protocol.        We  conduct our  evaluation  on  TAP-Vid  (Doersch  et al., 2022)  compris- 
+ing TAP-Vid-Kinetics,  TAP-Vid-DAVIS and RGB-Stacking.                     TAP-Vid-Kinetics consists of 1,144 
+YouTube videos from the Kinetics-700–2020 validation set (Carreira & Zisserman, 2017), featuring 
+complex camera motion and cluttered backgrounds, with an average of 26 tracks per video.  TAP- 
+Vid-DAVIS  comprises  30  real-world  videos  from  the  DAVIS  2017  validation  set  (Perazzi  et  al., 
+2016), with an average of 22 tracks per video. RGB-Stacking is a synthetically generated dataset of 
+robotic videos with many texture-less regions that are difficult to track. 
+
+We use the standard TAP-Vid metrics: Occlusion Accuracy (OA; accuracy of occlusion prediction as 
+binary classification), δvis   (fraction of visible points tracked within 1, 2, 4, 8 and 16 pixels, averaged 
+                           avg 
+over thresholds) and Average Jaccard (AJ, measuring tracking and occlusion prediction accuracy 
+together). All videos are resized to 256 ×256 pixels before being processed by the model. 
+
+Similarly, we evaluate CoTracker3 on RoboTAP (Vecerik et al., 2023), which contains 265 real- 
+world videos of robotic manipulation tasks, with an average duration of 272 frames. Following (Do- 
+ersch et al., 2022), we evaluate TAP-Vid and RoboTAP in the “first query” mode:  sampling query 
+points from the first frame where they become visible.  Additionally, we also evaluate on Dynami- 
+cReplica (Karaev et al., 2023) following (Karaev et al., 2024). Because this dataset is synthetic, the 
+tracker can be evaluated on occluded points. The evaluation subset of Dynamic Replica consists of 
+20 long (300 frames) sequences of articulated 3D models.                We evaluate these benchmarks at their 
+native resolution but resize the predictions to a resolution of 256 ×256 pixels and report the accuracy 
+of visible (δvis ) and occluded points (δocc ) using the same thresholds as in TAP-Vid. 
+              avg                             avg 
+
+4.1    COMPARISON TO THE STATE-OF-THE -ART 
+
+For fairness with trackers blind to the correlation between different tracks, we evaluate CoTracker3 
+on TAP-Vid on one query point at a time and sample additional support points to leverage joint 
+tracking (Karaev et al., 2024).       This ensures that no information about objects in the videos leaks 
+to the tracker through the selection of benchmark points (which generally correlate with objects in 
+
+                                                          7 
+
+----------------------- Page 8-----------------------
+
+                                                                       Dynamic Replica          RoboTAP          Mean 
+ Method                                  Train        Size↓   Time↓ 
+                                                                       δvis ↑    δocc  ↑    AJ ↑   δvis ↑ OA↑     δvis ↑ 
+                                                                        avg        avg              avg            avg 
+
+ PIPs++ (Zheng et al., 2023)             PO            25M       -      64.0      28.5       —     63.0     —     63.5 
+ TAPIR (Doersch et al., 2023)            Kub           31M      293     66.1      27.2      59.6   73.4    87.0   69.8 
+ CoTracker (Karaev et al., 2024)         Kub           45M      472     68.9      37.6      58.6   70.6    87.0   69.8 
+ TAPTR (Li et al., 2024)                 Kub             -       -      69.5      34.1      60.1   75.3    86.9   72.4 
+ LocoTrack (Cho et al., 2024)            Kub           12M      290     71.4      29.8      62.3   76.2    87.1   73.8 
+ CoTracker3 (Ours, online)               Kub           25M      405     72.9      41.0      60.8   73.7    87.1   73.3 
+ CoTracker3 (Ours, offline)              Kub           25M      209     69.8      41.8      59.9   73.4    87.1   71.6 
+
+ BootsTAPIR (Doersch et al., 2024)       Kub+15M       78M      303     69.0      28.0      64.9   80.1    86.3   74.6 
+ CoTracker3 (Ours, online)               Kub+15k       25M      405     73.3      40.1      66.4   78.8    90.8   76.1 
+ CoTracker3 (Ours, offline)              Kub+15k       25M      209     72.2      42.3      64.7   78.0    89.4   75.1 
+
+Table 2:     Results on Dynamic Replica and RoboTAP. Our approach consistently shows better 
+results.   Only  δvis  on RoboTAP is better for BootsTAPIR, trained on 1,000 × more data.                      Size in 
+                   avg 
+number of params; speed expressed as µs per frame and per tracked point. See Figure 3 for qualita- 
+tive results on RoboTAP. 
+
+Figure 3:  Ours.  Predictions of online (first three columns) and offline (last three columns) models 
+on RoboTAP before (first row) and after (second row) scaling.  We visualize the distance between 
+ground truth (crosses) and model predictions (points). Scaling helps to improve predictions of both 
+online and offline models. 
+
+benchmarks). We multiply predicted visibility by predicted confidence and apply a threshold to the 
+resulting quantity as in (Doersch et al., 2023), improving the AJ and OA metrics. 
+
+As shown in Table  1, CoTracker3 is highly competitive with other trackers across various bench- 
+marks even when only trained using synthetic data (Kub).                 Adding unlabelled videos utilizing the 
+approach of Section 4.2 (+15k) boosts the results well above the state-of-the-art for all metrics for 
+DAVIS, RGB-S, and Kinetics,  and for two out of three metrics (AJ and OA) on RoboTAP (Ta- 
+ble 2). The +15k offline version is even better than the online one on DAVIS and RGB-S, but worse 
+on Kinetics and RoboTAP.  As for data efficiency, despite being trained on just 15k additional real 
+videos, our models outperform BootsTAPIR, which was trained using 15M videos (i.e., 1,000 more). 
+Slightly better performance can be obtained by increasing the data further (Section 4.2). LocoTrack 
+also benefits similarly from our training scheme but struggles during occlusions, as shown next. 
+
+Tracking occluded points            We compare CoTracker3 with other methods on Dynamic Replica in 
+Table 2 (δocc    and OA columns).  On this benchmark, CoTracker3 online is better than all the other 
+             avg 
+methods even when trained solely on Kubric; in particular, it is much better than LocoTrack, which 
+justifies the additional parameters in the cross-track attention modules.  Adding the 15k real videos 
+improves the tracking of visible points for the online and offline versions, but only the offline model 
+shows improvement in tracking occluded points. In addition to improving more, CoTracker3 offline 
+tracks occluded points better than the online version.  This is because accessing all video frames at 
+once helps to interpolate trajectories behind occlusions. See Figure 4 for qualitative results. 
+
+                                                           8 
+
+----------------------- Page 9-----------------------
+
+      Cross-track                Dynamic Replica                                         Mean on TAP-Vid 
+                                                                   Self-training 
+        attention              δvis ↑            δocc  ↑                              AJ↑       δavg  ↑    OA↑ 
+                                avg               avg 
+
+            ✗                   71.3              35.9                   ✗            62.2       74.5      88.2 
+            ✓                   72.9              41.0                   ✓            63.5       75.7      89.5 
+
+Table  3:   Impact  of  cross-track  attention  on  oc-          Table   4:   Self-training.       Training    Co- 
+cluded tracking.      Cross-track attention improves the         Tracker3 online on its own predictions im- 
+tracking of occluded points substantially.        It also im-    proves the model.     We use 10k real videos 
+proves visible points, but the effect is smaller.                and train to convergence. 
+
+                                                                     Table   5:   Models     used   as  teachers. 
+                                           Mean on TAP-Vid 
+ RT onl.    RT offl.   TAPIR     CoTr.                               We use CoTracker3 online as a student 
+                                          AJ↑    δavg  ↑  OA↑        model and ablate different combinations 
+     ✗         ✗          ✗        ✗      62.2    74.5    88.2       of teacher models.  The first row corre- 
+    ✓          ✗          ✗        ✗      63.5    75.7    89.5       sponds to the model trained only on syn- 
+    ✓          ✓          ✗        ✗      64.5    76.4    89.9       thetic data. The second row corresponds 
+    ✓          ✗          ✓        ✗      63.6    76.2    89.7       to self-training.  Generally, the more di- 
+    ✓          ✗          ✗        ✓      64.2    76.5    90.1       verse teachers we have, the better is the 
+    ✓          ✓          ✓        ✗      64.0    76.6    89.9 
+    ✓          ✗          ✓        ✓      64.2    76.6    90.1       tracking accuracy (δavg). 
+
+    ✓          ✓          ✗        ✓      64.0    76.6    90.0 
+    ✓          ✓          ✓        ✓      64.0    76.8    90.2 
+
+4.2    SCALING EXPERIMENTS 
+
+In Figure  1, we show how CoTracker3, LocoTrack, and CoTracker (Karaev et al., 2024) improve 
+with our pseudo-labeling pipeline as the training set size increases. Starting with models pre-trained 
+on a synthetic dataset (Greff et al., 2022) (0 at x-axis), we train them on progressively larger real 
+data sets:   0.1k,  1k,  5k,  15k,  30k,  and 100k videos.     Models are trained to convergence on their 
+respective subsets.    All models improve with just 0.1k real-world videos and continue improving 
+with more.  Improvements for CoTracker3 online, offline, and LocoTrack tend to plateau after 30k 
+videos, likely because the student surpasses the teachers.           This may also explain why CoTracker, 
+initially much weaker than two of its teachers (CoTracker3 online and offline), keeps improving up 
+to and possibly beyond 100k videos, which is the maximum we can afford to explore. Our training 
+strategy is effective for all these models.  We analyse the effect of using a scaled CoTracker3 as a 
+new teacher in the supplement. For comparison, BootsTAPIR (Doersch et al., 2024) uses 15 million 
+real videos and a complex protocol involving augmentations, loss masks, and more. 
+
+Interestingly,  we found that training CoTracker3 with its own predictions as annotations without 
+other teachers (i.e., self-training) further improves the results on all the TAP-Vid benchmarks by 
++1.2 points  on  average  (see  Table  4).      Presumably,  fine-tuning  on  real  data,  even  with  its  own 
+annotations, helps the model reduce the domain gap between real and synthetic data. 
+
+4.3    ABLATIONS 
+
+Cross-track attention.        Table 3 shows that cross-track attention improves results, particularly for 
+occluded points (+5.1 occluded vs. +1.6 visible on Dynamic Replica).                 This is because by using 
+cross-track attention, the model can guess the positions of the occluded points based on the positions 
+of the visible ones. This cannot be done if the points are tracked independently. 
+
+Teacher models.        We assess the impact of using multiple teachers for generating pseudo-labels in 
+Table 5. We start by removing weaker models and always keep the student model itself as a teacher. 
+We demonstrate that removing a teacher always leads to worse results compared to the last row, 
+where we train with all four teacher models. This shows that every teacher is important and that the 
+student model can always extract complementary knowledge, even from weaker teachers. 
+
+Point sampling.       In Table 6 we have explored alternative point sampling methods, including Light- 
+Glue (Lindenberger et al., 2023), SuperPoint (DeTone et al., 2018), and DISK (Tyszkiewicz et al., 
+
+                                                         9 
+
+----------------------- Page 10-----------------------
+
+Figure 4: Qualitative comparison. Tracking a grid of 100 ×100 points from the first frame should 
+maintain  grid  patterns  in  future  frames  when  the  motion  is  simple. LocoTrack  and  CoTracker3 
+are more consistent than BootsTAPIR, but neither LocoTrack nor BootsTAPIR can track through 
+occlusions and also lose more background (1st column) and object points (3rd and 4th columns). 
+
+ Sampling    Kinetics  DAVIS   RoboTAP    RGB-S                            Average on TAP-Vid 
+                                                             Frozen head 
+ Uniform     67.9       76.9      78.4     84.0                            AJ ↑   δavg  ↑ OA ↑ 
+ SuperPoint  68.1       76.7      78.9     81.9 
+ DISK        68.0       76.7      78.6     82.7                   ✗        63.2    76.6    86.3 
+                                                                  ✓        64.0    76.8    90.2 
+ SIFT        68.2       77.0      78.8     83.3 
+
+Table 6:  Point sampling strategies on δ       on   Table 7:   Average AJ, δavg   and OA on TAP-Vid, 
+                                            avg     where freezing the confidence and visibility heads 
+TAP-Vid.   SIFT is overall best, but the method 
+is robust w.r.t. this choice.                       improves performance, avoiding forgetting. 
+
+2020). The choice of the sampling method does not significantly affect the performance. However, 
+SIFT sampling results are consistently high across all the TAP-Vid datasets. 
+
+Freezing the confidence and visibility head.       In Table 7, we show that splitting the transformer 
+head into a separate head for tracks and a head for confidence and visibility helps to avoid forgetting 
+when supervising only tracks while training on real data.     We freeze the head for confidence and 
+visibility at this stage. This improves AJ by +0.8 and OA by +3.9 on TAP-Vid on average. 
+
+5    CONCLUSION 
+
+We introduced CoTracker3, a new point tracker that outperforms the state-of-the-art on TAP-Vid 
+and other benchmarks. CoTracker3’s architecture combines several good ideas from recent trackers 
+but eliminates unnecessary components and significantly simplifies others.  CoTracker3 also shows 
+the power of a simple semi-supervised training protocol, where real videos are annotated utilizing 
+several off-the-shelf trackers and then used to fine-tune a model that outperforms all teachers. With 
+this protocol, CoTracker3 can surpass trackers trained on  ×1,000 more videos.  By tracking points 
+jointly, CoTracker3 handles occlusions better than any other model, particularly when operated in 
+offline mode. Our model can be used as a building block for tasks requiring motion estimation, such 
+as 3D tracking, controlled video generation, or dynamic 3D reconstruction. 
+
+                                                   10 
+
+----------------------- Page 11-----------------------
+
+REFERENCES 
+
+Nicolas  Carion,  Francisco  Massa,  Gabriel  Synnaeve,  Nicolas  Usunier,  Alexander  Kirillov,  and 
+   Sergey Zagoruyko.    End-to-end object detection with transformers.     In Proc. ECCV. Springer, 
+   2020. 
+
+Joao Carreira and Andrew Zisserman. Quo vadis, action recognition? a new model and the kinetics˜ 
+   dataset. In 2017 IEEE Conference on Computer Vision and Pattern Recognition (CVPR), 2017. 
+   doi: 10.1109/CVPR.2017.502. 
+
+Seokju Cho, Jiahui Huang, Jisu Nam, Honggyu An, Seungryong Kim, and Joon-Young Lee.  Local 
+   all-pair correspondence for point tracking. Proc. ECCV, 2024. 
+
+Daniel DeTone, Tomasz Malisiewicz, and Andrew Rabinovich. Superpoint: Self-supervised interest 
+   point detection and description, 2018. 
+
+Carl Doersch, Ankush Gupta, Larisa Markeeva, Adria Recasens, Lucas Smaira, Yusuf Aytar, Joao`       ˜ 
+   Carreira, Andrew Zisserman, and Yi Yang.      Tap-vid:  A benchmark for tracking any point in a 
+   video. arXiv, 2022. 
+
+Carl Doersch,  Yi Yang,  Mel Vecerik,  Dilara Gokay,  Ankush Gupta,  Yusuf Aytar,  Joao Carreira, 
+   and Andrew Zisserman.     TAPIR: Tracking any point with per-frame initialization and temporal 
+   refinement. arXiv, 2306.08637, 2023. 
+
+Carl Doersch, Yi Yang, Dilara Gokay, Pauline Luc, Skanda Koppula, Ankush Gupta, Joseph Hey- 
+   ward, Ross Goroshin, Joao Carreira, and Andrew Zisserman. Bootstap: Bootstrapped training for˜ 
+   tracking-any-point. arXiv preprint arXiv:2402.00847, 2024. 
+
+William Falcon and The PyTorch Lightning team.         PyTorch Lightning,  2019.   URL  https:// 
+   github.com/Lightning-AI/lightning. 
+
+Peter Foldiak. Learning invariance from transformation sequences. Neural computation, 3(2), 1991.¨ ´ 
+
+Ross  Goroshin,  Joan  Bruna,  Jonathan  Tompson,  David  Eigen,  and  Yann  LeCun.     Unsupervised 
+   learning of spatiotemporally coherent metrics. In Proc. ICCV, 2015. 
+
+Klaus Greff, Francois Belletti, Lucas Beyer, Carl Doersch, Yilun Du, Daniel Duckworth, David J 
+   Fleet, Dan Gnanapragasam, Florian Golemo, Charles Herrmann, et al. Kubric: A scalable dataset 
+   generator. In Proc. CVPR, 2022. 
+
+Adam  W  Harley,  Zhaoyuan  Fang,  and  Katerina  Fragkiadaki.    Particle  video  revisited: Tracking 
+   through occlusions using point trajectories. In Proc. ECCV, 2022. 
+
+Allan Jabri, Andrew Owens, and Alexei Efros. Space-time correspondence as a contrastive random 
+   walk. Proc. NeurIPS, 33, 2020. 
+
+Joel Janai, Fatma Guney, Anurag Ranjan, Michael Black, and Andreas Geiger. Unsupervised learn- 
+   ing of multi-frame optical flow with occlusions. In Proc. ECCV, 2018. 
+
+Nikita Karaev, Ignacio Rocco, Benjamin Graham, Natalia Neverova, Andrea Vedaldi, and Christian 
+   Rupprecht. Dynamicstereo: Consistent dynamic depth from stereo videos. In Proc. CVPR, 2023. 
+
+Nikita Karaev, Ignacio Rocco, Benjamin Graham, Natalia Neverova, Andrea Vedaldi, and Christian 
+   Rupprecht. Cotracker: It is better to track together. Proc. ECCV, 2024. 
+
+Zihang Lai, Erika Lu, and Weidi Xie. Mast: A memory-augmented self-supervised tracker. In Proc. 
+   CVPR, 2020. 
+
+Guillaume Le Moing, Jean Ponce, and Cordelia Schmid.         Dense optical tracking:  Connecting the 
+   dots. In CVPR, 2024. 
+
+Hongyang Li, Hao Zhang, Shilong Liu, Zhaoyang Zeng, Tianhe Ren, Feng Li, and Lei Zhang. Taptr: 
+   Tracking any point with transformers as detection. arXiv preprint arXiv:2403.13042, 2024. 
+
+                                                  11 
+
+----------------------- Page 12-----------------------
+
+Shen Li, Yanli Zhao, Rohan Varma, Omkar Salpekar, Pieter Noordhuis, Teng Li, Adam Paszke, Jeff 
+   Smith, Brian Vaughan, Pritam Damania, and Soumith Chintala. Pytorch distributed: Experiences 
+   on accelerating data parallel training, 2020. 
+
+Philipp Lindenberger, Paul-Edouard Sarlin, and Marc Pollefeys. Lightglue: Local feature matching 
+   at light speed, 2023. 
+
+Liang Liu, Jiangning Zhang, Ruifei He, Yong Liu, Yabiao Wang, Ying Tai, Donghao Luo, Chengjie 
+   Wang, Jilin Li, and Feiyue Huang.  Learning by analogy: Reliable supervision from transforma- 
+   tions for unsupervised optical flow estimation. In Proc. CVPR, 2020. 
+
+Pengpeng Liu, Irwin King, Michael R Lyu, and Jia Xu.         Ddflow:  Learning optical flow with un- 
+   labeled data distillation. In Proceedings of the AAAI Conference on Artificial Intelligence, vol- 
+   ume 33, 2019a. 
+
+Pengpeng Liu, Michael Lyu, Irwin King, and Jia Xu.       Selflow:  Self-supervised learning of optical 
+   flow. In Proc. CVPR, 2019b. 
+
+Ilya Loshchilov   and  Frank   Hutter.   Decoupled    weight  decay  regularization.   arXiv   preprint 
+   arXiv:1711.05101, 2017. 
+
+David G Lowe. Object recognition from local scale-invariant features. In Proc. ICCV, 1999. 
+
+Simon Meister, Junhwa Hur, and Stefan Roth.  Unflow: Unsupervised learning of optical flow with 
+   a bidirectional census loss.  In Proceedings of the AAAI Conference on Artificial Intelligence, 
+   volume 32, 2018. 
+
+F. Perazzi,  J. Pont-Tuset,  B. McWilliams,  L. Van Gool,  M. Gross,  and A. Sorkine-Hornung.        A 
+   benchmark dataset and evaluation methodology for video object segmentation.        In Proc. CVPR, 
+   2016. 
+
+Peter Sand and Seth Teller.   Particle video:  Long-range motion estimation using point trajectories. 
+   IJCV, 80, 2008. 
+
+Jianbo Shi and Carlo Tomasi. Good features to track. In Proc. CVPR, 1994. 
+
+Xinglong Sun, Adam W Harley, and Leonidas J Guibas. Refining pre-trained motion models. arXiv 
+  preprint arXiv:2401.00850 , 2024. 
+
+Zachary Teed and Jia Deng.      Raft:  Recurrent all-pairs field transforms for optical flow. In Proc. 
+   ECCV, 2020. 
+
+Michał J. Tyszkiewicz, Pascal Fua, and Eduard Trulls.      Disk:  Learning local features with policy 
+   gradient, 2020. 
+
+Mel Vecerik, Carl Doersch, Yi Yang, Todor Davchev, Yusuf Aytar, Guangyao Zhou, Raia Hadsell, 
+   Lourdes Agapito, and Jon Scholz.  Robotap: Tracking arbitrary points for few-shot visual imita- 
+   tion, 2023. 
+
+Carl Vondrick, Abhinav Shrivastava, Alireza Fathi, Sergio Guadarrama, and Kevin Murphy.  Track- 
+   ing emerges by colorizing videos. In Proc. ECCV, 2018. 
+
+Jianyuan Wang, Nikita Karaev, Christian Rupprecht, and David Novotny. Vggsfm: Visual geometry 
+   grounded deep structure from motion. In Proc. CVPR, 2024. 
+
+Xiaolong Wang and Abhinav Gupta.  Unsupervised learning of visual representations using videos. 
+   In Proc. ICCV, 2015. 
+
+Xiaolong  Wang,    Allan  Jabri, and  Alexei  A  Efros.   Learning  correspondence  from  the  cycle- 
+   consistency of time. In Proc. CVPR, 2019. 
+
+Yang Wang,  Yi Yang,  Zhenheng Yang,  Liang Zhao,  Peng Wang,  and Wei Xu.           Occlusion aware 
+   unsupervised learning of optical flow. In Proc. CVPR, 2018. 
+
+                                                  12 
+
+----------------------- Page 13-----------------------
+
+Laurenz Wiskott and Terrence J Sejnowski. Slow feature analysis: Unsupervised learning of invari- 
+   ances. Neural computation, 14(4), 2002. 
+
+Yang   Zheng,  Adam    W   Harley,  Bokui   Shen,  Gordon   Wetzstein,  and  Leonidas   J Guibas. 
+  Pointodyssey:   A large-scale synthetic dataset for long-term point tracking. In Proceedings of 
+   the IEEE/CVF International Conference on Computer Vision, 2023. 
+
+                                                13 
+
+----------------------- Page 14-----------------------
+
+APPENDIX 
+
+A    IMPLEMENTATION DETAILS 
+
+We pre-train both online and offline model versions on synthetic TAP-Vid-Kubric (Doersch et al., 
+2022; Greff et al., 2022) for 50,000 iterations on 32 NVIDIA A100 80GB GPUs with a batch size 
+of 1 video.   We train CoTracker3 online on videos of length T        =  64 with a window size of  16, 
+and sample 384 query points per video with a bias towards objects. Since the online version tracks 
+only forward in time, we sample points primarily at the beginning of the video. We train the offline 
+version on videos of length T    ∈ {30, 31, . . . , 60} with time embeddings of size 60. We interpolate 
+time embeddings to the current sequence length both at training and evaluation.          We sample  512 
+query points per video uniformly in time.  Both models are trained in bfloat16 with gradient norm 
+clipping  using  PyTorch  Lightning  (Falcon  &  The  PyTorch  Lightning  team, 2019)  with  PyTorch 
+distributed data parallel (Li et al., 2020).  The optimizer is AdamW (Loshchilov & Hutter, 2017) 
+with β1  = 0.9, β2  = 0.999, learning rate 5e − 4, and weight decay 1e − 5. The optimizer adopts a 
+linear warm-up for 1000 steps followed by a cosine learning rate scheduler. 
+
+We scale CoTracker3 on a dataset of Internet-like videos primarily featuring humans and animals. 
+We visualize the scaling pipeline in Figure 5.     To ensure the quality and relevance of our training 
+data, we use caption-based filtering with specific keywords to select videos containing real-world 
+content while excluding those with computer-generated imagery, animation, or natural phenomena 
+that are challenging to track, such as fire, lights, and water. 
+
+When training on real data, we use a similar setup while reducing the learning rate to 5e − 5 with 
+the same cosine scheduler without warm-up.  We train both online and offline versions for 15,000 
+iterations with 384 tracks per video sampled with SIFT on eight randomly selected frames with 
+frame sampling biased towards the beginning of the video. 
+
+Following (Karaev et al., 2024), when evaluating CoTracker3 online on TAP-Vid, we add 5 ×5 points 
+sampled on a regular grid and 8 ×8 points sampled on a local grid around the query point to provide 
+context to the tracker.  We do the same for the scaled offline version during inference.  The Kubric- 
+trained offline version, however, relies on uniform point sampling during training.  For this model, 
+during evaluation on TAP-Vid, we instead sample  1000 additional support points uniformly over 
+time. 
+
+Figure 5:  Scaling pipeline.    Given a video, we randomly choose 8 frames and sample 384 query 
+points across these frames using SIFT Lowe (1999). Then, we predict tracks for these query points 
+with the student and randomly selected teacher models. Finally, we compute the difference between 
+the predicted tracks and update the student model. 
+
+B    PERFORMANCE 
+
+In Figure 6, we compare the speed of CoTracker3 with other point trackers. We measure the average 
+time it takes for the method to process one frame, with the number of tracked points varying between 
+1 and 10,000.  We average this across 20 videos of varying lengths from DAVIS.  Even though Co- 
+Tracker and CoTracker3 apply group attention between tracked points, the time complexity remains 
+linear thanks to the proxy tokens introduced by (Karaev et al., 2024). While all the trackers exhibit 
+
+                                                    14 
+
+----------------------- Page 15-----------------------
+
+  Teacher selection strategy   Kinetics    DAVIS     RoboTAP      RGB-S 
+
+  Random                       68.2         77.0        78.8        83.3 
+  Averaging                    67.4         76.5        77.9        82.4 
+  Median                       67.3         76.3        77.3        81.1 
+
+Table 8:  Supervision.  Random sampling of teachers consistently leads to better δavg    on TAP-Vid 
+compared to supervision with either the mean or the median of all teachers’ predictions. 
+
+                                                        Num. of iterations Average on TAP-Vid 
+                     Average on TAP-Vid 
+          Model                                                            AJ ↑ δavg  ↑  OA ↑ 
+                     AJ ↑ δavg  ↑  OA ↑                         1k         63.3  75.6     87.5 
+
+         Kub+15k      64.0 76.8     90.2                       15k         64.0  76.8    90.2 
+      Kub+15k+15k 64.2     76.9     89.7                       30k         64.4  76.8    89.7 
+                                                               60k         64.4  77.0    89.5 
+Table  9:  Repeated    scaling.   We   scale Co- 
+Tracker3 offline, then start from a scaled model,   Table 10:  Longer training on 15k videos.  We 
+and scale it again with the scaled model as one     train CoTracker3 offline for longer to determine 
+of the  teachers. Repeated  scaling slightly im-    the  optimal  number  of  iterations  for  a  given 
+proves tracking accuracy.                           number of videos. As a trade-off between train- 
+                                                    ing  costs  and  the  results  obtained,  we  use  the 
+                                                    same  number  of  iterations  as  the  number  of 
+                                                    videos. 
+
+linear time complexity depending on the number of tracks, CoTracker3 is approximately 30% faster 
+than LocoTrack (Cho et al., 2024), the fastest point tracker to date. 
+
+                       0.5 
+                                    LocoTrack 
+                                    BootsTAPIR 
+                    ] 0.4 
+                     s              CoTracker 
+                    [ 
+                        
+                     e,             Ours offline 
+                     m 0.3          Ours online 
+                     a 
+                     r 
+                    f 
+                        
+                     r 
+                     e 0.2 
+                     p 
+                        
+                     e 
+                     m 
+                    i 0.1 
+                    T 
+
+                       0.0 
+                             0       2000      4000     6000      8000     10000 
+                                      Number of tracked points 
+
+Figure 6:   Efficiency.  We evaluate the speed of different trackers on DAVIS depending on the 
+number of tracks and report the average time each tracker takes to process a frame.       Our offline 
+architecture is the fastest among all these models, with LocoTrack being the fastest tracker to date. 
+
+C    ADDITIONAL EXPERIMENTS 
+
+Training with the average of teachers’ predictions.      Interestingly, we found that aggregating the 
+predictions of multiple teachers instead of using a random teacher does not improve performance, 
+as shown in Table 8, whereas incorporating additional teachers into training consistently enhances 
+the quality of our student model, demonstrated in Table 5. 
+
+                                                  15 
+
+----------------------- Page 16-----------------------
+
+Repeated scaling.     We study the effect of iterative scaling to investigate the limits of our multi- 
+teacher scaling pipeline. Specifically, we scale CoTracker3 offline using our pipeline, where one of 
+the teachers is the model itself.  We then take this trained student model and attempt to improve it 
+further by re-applying the same scaling pipeline but with the original student model replaced by the 
+newly trained student model as one of the teachers. 
+
+We find that this second round of scaling leads to slight improvements in performance metrics. This 
+suggests that the student model has already distilled most of the knowledge from the other teachers 
+during the initial training phase. We report the results in Table 9. 
+
+Convergence  behavior  during  scaling.       We  examine  the  convergence  behavior  of  our  scaling 
+pipeline by fixing the dataset and all the hyper-parameters, varying only the number of iterations 
+over the dataset.  We show in Table  10 that increasing the number of iterations leads to improved 
+performance on TAP-Vid, but with diminishing returns.  Specifically, we observe a saturation point 
+beyond which further increases in the number of training iterations do not yield significant improve- 
+ments in model quality. We thus use the same number of iterations as the number of training videos 
+with a batch size of 32, iterating over each video 32 times. 
+
+D    LIMITATIONS 
+
+A key limitation of our pseudo-labeling pipeline is its reliance on the quality and diversity of teacher 
+models.  The observed saturation in performance on TAP-Vid during scaling suggests that the stu- 
+dent model absorbs knowledge from all the teachers and, after a certain point, struggles to improve 
+further.  Thus, we need stronger or more diverse teacher models to achieve additional gains for the 
+student model. 
+
+                                                   16 

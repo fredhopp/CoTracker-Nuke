@@ -9,7 +9,7 @@
 ## Current Tasks
 
 ### 🐛 Critical Fixes
-- [ ] **Fix Double Frame Offset** - Frame offset is being applied twice:
+- [x] **Fix Double Frame Offset** - Frame offset is being applied twice:
   1. In `generate_csv_with_frame_offset()` when creating CSV
   2. In `generate_exact_nuke_file()` when processing frame numbers
   - **Solution**: Remove intermediate CSV with added offset, apply frame offset only in .nk generation
@@ -22,7 +22,7 @@
 - [x] **Remove Translate/Center Curves** - ✅ Removed unnecessary translate and center lines from .nk output
 
 ### 📚 Documentation & Maintenance
-- [ ] **Update Documentation** - Update README.md and other documentation to reflect all the recent progress and fixes made
+- [x] **Update Documentation** - Update README.md and other documentation to reflect all the recent progress and fixes made
 
 ## Completed Tasks ✅
 

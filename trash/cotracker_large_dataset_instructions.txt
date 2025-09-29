@@ -1,0 +1,48 @@
+CoTracker Large Dataset Nuke Import:
+
+File: temp/cotracker_large_104pts_nuke.py
+Data: 104 points, frames 0-113 (11,275 quality keyframes)
+
+DATASET STATISTICS:
+- Total rows processed: 11,856
+- Points preserved: ALL 104 points
+- Keyframes filtered out: 581 (low confidence/invisible)
+- Valid keyframes: 11,275
+- Full coverage points: 78 (114 keyframes each)
+- Partial coverage points: 26 (gaps due to filtering)
+
+PERFORMANCE TEST INSTRUCTIONS:
+1. Open Nuke
+2. Script Editor (Alt+Shift+S)
+3. Load: temp/cotracker_large_104pts_nuke.py
+4. Run (Ctrl+Enter)
+5. Monitor console for timing information
+
+EXPECTED PERFORMANCE:
+- Data loading: ~0.01 seconds
+- Track creation: ~10-30 seconds (estimated)
+- Total time: ~30-60 seconds (estimated)
+
+OPTIMIZATIONS INCLUDED:
+- Direct CSV loading (no embedded data)
+- Progress indicators every 20 tracks
+- Minimal console output during creation
+- Coordinate system conversion
+- Quality filtering (confidence >= 0.5)
+
+WHAT TO MONITOR:
+- Memory usage during track creation
+- Console timing reports
+- Nuke responsiveness
+- Final track count verification
+
+RESULT:
+- Tracker4 node "CoTracker_Large_104pts"
+- 104 tracks ready for match-moving/stabilization
+- High-quality keyframes only
+
+NOTE:
+- Script assumes 1080p video (1920x1080)
+- Loads data directly from CSV for better memory efficiency
+- Some tracks have gaps where confidence was too low
+- This tests real-world performance with substantial data

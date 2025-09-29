@@ -130,6 +130,6 @@ MIT License - See LICENSE file for details
 
 ## Acknowledgments
 
-- Facebook Research for CoTracker
+- Facebook Research for CoTracker - [CoTracker3 Project Page](https://cotracker3.github.io/)
 - Foundry for Nuke integration specifications
 - The open-source community for supporting libraries

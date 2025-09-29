@@ -873,7 +873,13 @@ Root {
     
     def apply_mask_to_grid(self, queries: torch.Tensor, mask: np.ndarray) -> torch.Tensor:
         """Filter grid queries based on mask. Only keep points in white areas."""
+        self.logger.info(f"apply_mask_to_grid called - mask is None: {mask is None}")
+        if mask is not None:
+            self.logger.info(f"Mask shape: {mask.shape}, unique values: {np.unique(mask)}")
+            self.logger.info(f"is_mask_empty result: {self.is_mask_empty(mask)}")
+        
         if mask is None or self.is_mask_empty(mask):
+            self.logger.info("Returning original queries (no mask or empty mask)")
             return queries  # Return original queries if no mask
         
         # Convert queries to numpy for processing
@@ -1053,8 +1059,10 @@ Root {
         if self.current_mask is not None:
             queries_tensor = self.apply_mask_to_grid(queries_tensor, self.current_mask)
         
-        print(f"Generated {len(queries)} query points on frame {reference_frame}")
-        print(f"Query tensor shape: {queries_tensor.shape}")
+        self.logger.info(f"Generated {len(queries)} query points on frame {reference_frame}")
+        self.logger.info(f"Query tensor shape before mask filtering: {queries_tensor.shape}")
+        if self.current_mask is not None:
+            self.logger.info(f"Query tensor shape after mask filtering: {queries_tensor.shape}")
         
         return queries_tensor
     
@@ -1169,8 +1177,8 @@ Root {
                 # CoTracker2 or offline model
                 print("Using CoTracker2/CoTracker3 offline API")
                 with torch.no_grad():
-                    if reference_frame == 0:
-                        # Use automatic grid on first frame with bidirectional tracking
+                    if reference_frame == 0 and self.current_mask is None:
+                        # Use automatic grid on first frame with bidirectional tracking (only if no mask)
                         pred_tracks, pred_visibility = self.cotracker_model(
                             video_tensor, 
                             grid_size=grid_size,
@@ -1178,7 +1186,9 @@ Root {
                         )
                     else:
                         # Use custom queries with specified reference frame and bidirectional tracking
-                        print(f"Using custom reference frame: {reference_frame} with bidirectional tracking")
+                        # Also used when mask is present (regardless of reference frame)
+                        mask_info = f" with mask ({np.sum(self.current_mask == 255)}/{self.current_mask.size} pixels)" if self.current_mask is not None else ""
+                        print(f"Using custom reference frame: {reference_frame} with bidirectional tracking{mask_info}")
                         queries = self._generate_grid_queries(video, grid_size, reference_frame)
                         pred_tracks, pred_visibility = self.cotracker_model(
                             video_tensor, 
@@ -1529,31 +1539,54 @@ def create_gradio_interface():
             app.reference_frame = 0
             return f"Error selecting reference frame: {str(e)}. Using frame 0 as fallback."
     
-    def set_manual_reference_frame(frame_number):
-        """Set reference frame manually using frame number."""
+    def set_manual_reference_frame(frame_number_with_offset, start_frame_offset):
+        """Set reference frame manually using frame number (with offset applied) and trigger mask drawing."""
         app.logger.info(f"=== SET MANUAL REFERENCE FRAME CALLED ===")
-        app.logger.info(f"Frame number: {frame_number}")
+        app.logger.info(f"Frame number with offset: {frame_number_with_offset}")
+        app.logger.info(f"Start frame offset: {start_frame_offset}")
         
         if app.current_video is None:
-            return "Please load a video first."
+            return "Please load a video first.", None
         
         try:
-            frame_number = int(frame_number)
+            frame_number_with_offset = int(frame_number_with_offset)
+            start_frame_offset = int(start_frame_offset)
+            
+            # Validate that frame number is not less than start frame offset
+            if frame_number_with_offset < start_frame_offset:
+                return f"Error: Frame number ({frame_number_with_offset}) must be >= Image Sequence Start Frame ({start_frame_offset})", None
+            
+            # Convert from offset-applied frame number to 0-based video frame
+            frame_number = frame_number_with_offset - start_frame_offset
+            
             max_frame = app.current_video.shape[0] - 1
+            max_frame_with_offset = max_frame + start_frame_offset
             
             if frame_number < 0:
                 frame_number = 0
             elif frame_number > max_frame:
                 frame_number = max_frame
+                frame_number_with_offset = max_frame_with_offset  # Update the display value
             
             app.reference_frame = frame_number
-            app.logger.info(f"Manual reference frame set to: {frame_number}")
+            app.logger.info(f"Reference frame set to: {frame_number} (0-based video frame)")
             
-            return f"Reference frame manually set to: Frame {frame_number} (max: {max_frame})"
+            # Get reference frame image for mask drawing
+            ref_frame = app.get_reference_frame_image()
+            if ref_frame is None:
+                return f"Reference frame set to: Frame {frame_number_with_offset} (video frame {frame_number})\nError: Could not load reference frame image.", None
+            
+            # Convert reference frame to PIL for the editor
+            from PIL import Image
+            ref_pil = Image.fromarray(ref_frame)
+            
+            info_msg = f"Reference frame set to: Frame {frame_number_with_offset} (video frame {frame_number}, max: {max_frame_with_offset})\nReady for mask drawing. Use white brush to mark areas for tracking."
+            
+            return info_msg, ref_pil
             
         except Exception as e:
             app.logger.error(f"Error setting manual reference frame: {str(e)}")
-            return f"Error setting manual reference frame: {str(e)}"
+            return f"Error setting manual reference frame: {str(e)}", None
     
     def process_video(reference_video, grid_size):
         """Process video and return tracking results."""
@@ -1563,6 +1596,9 @@ def create_gradio_interface():
         preview_downsample = 1  # Always use 1/1 (all points)
         app.logger.info(f"Preview downsample: {preview_downsample} (fixed to 1/1)")
         app.logger.info(f"App reference frame: {app.reference_frame}")
+        app.logger.info(f"Current mask status: {app.current_mask is not None}")
+        if app.current_mask is not None:
+            app.logger.info(f"Mask shape: {app.current_mask.shape}, unique values: {np.unique(app.current_mask)}")
         
         if reference_video is None:
             app.logger.error("No reference video provided")
@@ -1695,7 +1731,10 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                 reference_frame=app.reference_frame  # User's chosen reference frame
             )
             
-            return f"✅ Nuke tracker file exported successfully!\n📁 Location: {nuke_file_path}\n📊 Frame offset: {frame_offset} applied\n🎯 CSV generated: {csv_path}"
+            # Convert CSV path to forward slashes for consistency
+            csv_path_formatted = csv_path.replace('\\', '/')
+            
+            return f"✅ Nuke tracker file exported successfully!\n📁 Location: {nuke_file_path}\n📊 Frame offset: {frame_offset} applied\n🎯 CSV generated: {csv_path_formatted}"
             
         except Exception as e:
             return f"❌ Error exporting Nuke file: {str(e)}"
@@ -1715,6 +1754,13 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                     height=300   # Half the default size
                 )
                 
+                # Image Sequence Start Frame (moved to top)
+                image_sequence_start_frame = gr.Number(
+                    label="Image Sequence Start Frame",
+                    value=1001,
+                    info="Frame offset for image sequences (videos start at 0, but image sequences may start at different frame numbers)"
+                )
+                
                 # Reference frame selection controls
                 gr.Markdown("### Reference Frame Selection")
                 with gr.Row():
@@ -1726,24 +1772,15 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                         scale=3
                     )
                     manual_frame_input = gr.Number(
-                        label="Manual Frame #",
-                        value=0,
-                        minimum=0,
-                        scale=1
+                        label="Frame #",
+                        value=1001,
+                        scale=1,
+                        info="Frame number (with start frame offset already applied)"
                     )
                 with gr.Row():
-                    select_reference_btn = gr.Button("Use Middle Frame", variant="secondary")
-                    set_manual_frame_btn = gr.Button("Use Manual Frame #", variant="primary")
+                    set_manual_frame_btn = gr.Button("Send Reference Frame to Masking", variant="primary")
                 
-                # Mask drawing section
-                gr.Markdown("### Optional Mask Drawing")
-                mask_info = gr.Textbox(
-                    label="Mask Status",
-                    value="No mask drawn (will track full grid)",
-                    interactive=False,
-                    lines=1
-                )
-                draw_mask_btn = gr.Button("Draw Mask", variant="secondary")
+                # Mask drawing section (simplified - triggered by reference frame button)
                 
                 # Mask drawing interface (always visible)
                 gr.Markdown("**Instructions:** Draw white areas where you want to track points. Black areas will be ignored.")
@@ -1768,7 +1805,6 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                 
                 with gr.Row():
                     save_mask_btn = gr.Button("Save Mask", variant="primary")
-                    cancel_mask_btn = gr.Button("Cancel", variant="secondary")
                 
                 # Status display
                 mask_result = gr.Textbox(
@@ -1817,12 +1853,6 @@ Note: All coordinate data includes visibility confidence and reference frame mar
         
         with gr.Row():
             with gr.Column():
-                image_sequence_start_frame = gr.Number(
-                    label="Image Sequence Start Frame",
-                    value=1001,
-                    info="Frame offset for image sequences (videos start at 0, but image sequences may start at different frame numbers)"
-                )
-            with gr.Column():
                 export_btn = gr.Button("Export to Nuke", variant="primary", size="lg")
             with gr.Column():
                 export_result = gr.Textbox(
@@ -1839,18 +1869,11 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             outputs=[reference_video, reference_frame_info]
         )
         
-        # Select reference frame
-        select_reference_btn.click(
-            fn=select_reference_frame,
-            inputs=[reference_video, reference_video],
-            outputs=[reference_frame_info]
-        )
-        
-        # Set manual reference frame
+        # Set manual reference frame and trigger masking
         set_manual_frame_btn.click(
             fn=set_manual_reference_frame,
-            inputs=[manual_frame_input],
-            outputs=[reference_frame_info]
+            inputs=[manual_frame_input, image_sequence_start_frame],
+            outputs=[reference_frame_info, mask_editor]
         )
         
         # Process video
@@ -1912,7 +1935,7 @@ Note: All coordinate data includes visibility confidence and reference frame mar
             """Process the edited image and save as mask."""
             try:
                 if app.reference_frame_image is None:
-                    return "Error: No reference frame loaded. Please select a reference frame first.", gr.Accordion(visible=True), "Error: No reference frame"
+                    return "Error: No reference frame loaded. Please select a reference frame first."
                 
                 # Add debug logging
                 app.logger.info(f"Processing mask from editor, image type: {type(edited_image)}")
@@ -1971,36 +1994,22 @@ Note: All coordinate data includes visibility confidence and reference frame mar
                     app.logger.info(f"Mask saved with {coverage:.1f}% coverage")
                 
                 app.logger.info(f"Returning mask result: {result_msg}")
-                app.logger.info(f"Returning mask status: {mask_status}")
-                return result_msg, mask_status
+                return result_msg
             
             except Exception as e:
                 error_msg = f"Error creating mask: {str(e)}"
                 app.logger.error(error_msg, exc_info=True)
-                return error_msg, "Error creating mask"
+                return error_msg
         
-        def cancel_mask_drawing():
-            """Cancel mask drawing."""
-            return "Mask drawing cancelled"
         
-        # Connect mask drawing events
-        draw_mask_btn.click(
-            fn=open_mask_drawing,
-            inputs=[],
-            outputs=[mask_info, mask_editor]
-        )
+        # Mask drawing events (triggered by reference frame selection)
         
         save_mask_btn.click(
             fn=save_mask_from_editor,
             inputs=[mask_editor],
-            outputs=[mask_result, mask_info]
+            outputs=[mask_result]
         )
         
-        cancel_mask_btn.click(
-            fn=cancel_mask_drawing,
-            inputs=[],
-            outputs=[mask_info]
-        )
     
     return interface
 

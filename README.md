@@ -1,17 +1,16 @@
 # CoTracker Nuke Integration App
 
+> **Development Note**: This project was developed with AI assistance (Claude) under human supervision, combining automated code generation with human oversight for architecture decisions, testing, and quality assurance.
+
 A powerful application that leverages Facebook Research's CoTracker for point tracking in videos and exports the tracking data in a format compatible with Foundry Nuke's CornerPin2D node.
 
 ## Features
 
 - 🎯 **Automatic Point Tracking**: Uses CoTracker3/CoTracker2 to track multiple points across video frames
-- 🔍 **Smart Corner Selection**: Automatically selects 4 optimal points for corner pin tracking based on:
-  - Point visibility throughout the sequence
-  - Spatial distribution (forming a good quadrilateral)
-  - Tracking stability (low motion variance)
 - 🎨 **Interactive GUI**: User-friendly Gradio interface for video upload and processing
-- 📤 **Nuke Export**: Generates complete Nuke scripts (.nk files) with CornerPin2D nodes
-- 🖼️ **Visual Preview**: Shows tracked points and selected corners on the first frame
+- 🎭 **Zone masking**: User can mask out a specific are on a reference frame to have trackers restricted to that zone
+- 🖼️ **Visual Preview**: Shows tracked points
+- 📤 **Nuke Export**: Generates complete Nuke scripts (.nk files)
 
 ## Installation
 
@@ -56,9 +55,7 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 
 3. **Process Video**: Click "Process Video" to run CoTracker and automatically select corner points
 
-4. **Preview Results**: View the tracking preview showing:
-   - Blue dots: All tracked points
-   - Red dots: Selected corner points (numbered)
+4. **Preview Results**: Double check that the mask and reference have been correctly considered.
 
 5. **Export to Nuke**: 
    - Enter a filename for your Nuke script
@@ -71,12 +68,6 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 2. **Import the script**: 
    - File → Import → Select your generated .nk file
    - Or drag and drop the .nk file into Nuke
-
-3. **Update the Read node**: 
-   - Select the Read node in the generated script
-   - Update the file path to point to your original video
-
-4. **Connect your replacement footage** to the CornerPin2D node input
 
 ## How It Works
 
@@ -94,7 +85,6 @@ The app uses a sophisticated algorithm to select the 4 best corner points:
 The generated Nuke script includes:
 - **Read node**: Placeholder for your source video
 - **Tracker4 node**: Contains all tracking data with keyframes
-- **CornerPin2D node**: Pre-configured with the 4 selected corner tracks
 
 ## Technical Details
 
@@ -120,14 +110,6 @@ The generated Nuke script includes:
 - **Memory Efficient**: Processes videos in chunks for large files
 - **Real-time Preview**: Fast preview generation for immediate feedback
 
-## System Rules
-
-⚠️ **Important Development Guidelines:**
-- Never push to git before confirming with the user
-- Always use the `.venv` virtual environment for dependencies
-- Install packages only within the virtual environment, not system-wide
-
-## Troubleshooting
 
 ### Common Issues
 
@@ -145,11 +127,6 @@ The generated Nuke script includes:
 
 MIT License - See LICENSE file for details
 
-## Contributing
-
-1. Follow the system rules in `SYSTEM_RULES.md`
-2. Test thoroughly with various video formats
-3. Document any new features or changes
 
 ## Acknowledgments
 

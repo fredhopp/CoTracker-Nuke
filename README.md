@@ -8,7 +8,13 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 
 🎥 **See CoTracker-Nuke in action:**
 
+<div align="center">
+
 [![CoTracker Demo](https://img.shields.io/badge/%20Watch%20Demo%20Video-red?style=for-the-badge&logo=youtube)](https://youtu.be/zWHQrzYtVKw)
+
+<iframe width="800" height="450" src="https://www.youtube.com/embed/zWHQrzYtVKw" title="CoTracker-Nuke Demo" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+</div>
 
 *Complete workflow demonstration: video upload, masking, tracking and Nuke export*
 

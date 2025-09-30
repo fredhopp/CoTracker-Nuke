@@ -8,11 +8,9 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 
 🎥 **See CoTracker-Nuke in action:**
 
-[![CoTracker Demo](https://img.shields.io/badge/▶️%20Watch%20Demo%20Video-blue?style=for-the-badge)](https://github.com/fredhopp/CoTracker-Nuke/blob/main/assets/demo/250929%20-%20DEV%20-%20CoTracker-Nuke%20-%20demo%2001.mp4)
+[![CoTracker Demo](https://img.shields.io/badge/%20Watch%20Demo%20Video-red?style=for-the-badge&logo=youtube)](https://youtu.be/zWHQrzYtVKw)
 
 *Complete workflow demonstration: video upload, masking, tracking and Nuke export*
-
-> **Note**: Click the button above to watch the demo video. GitHub doesn't support inline video playback in README files.
 
 ## Features
 

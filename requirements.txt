@@ -7,3 +7,4 @@ gradio>=4.0.0
 matplotlib>=3.7.0
 scipy>=1.11.0
 pillow>=10.0.0
+pyperclip>=1.8.0

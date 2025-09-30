@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 def generate_exact_nuke_file(csv_path, output_path=None, image_height=1080, min_confidence=0.5, 
-                            tracker_node_name=None, frame_offset=0, reference_frame=0):
+                            tracker_node_name=None, frame_offset=0, reference_frame=0, quiet_mode=False):
     """
     Generate exact .nk file matching the ground truth structure.
     
@@ -234,14 +234,14 @@ if __name__ == "__main__":
     
     # Check if command line arguments are provided
     if len(sys.argv) >= 4:
-        # Called from modular app with arguments: csv_path, output_path, frame_offset, reference_frame
+        # Called from modular app with arguments: csv_path, output_path, frame_offset, reference_frame, image_height
         csv_path = sys.argv[1]
         output_path = sys.argv[2] 
         frame_offset = int(sys.argv[3])
         reference_frame = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+        image_height = int(sys.argv[5]) if len(sys.argv) > 5 else 1080
         
         # Default configuration
-        image_height = 1080
         min_confidence = 0.5
         
         # Generate exact .nk file

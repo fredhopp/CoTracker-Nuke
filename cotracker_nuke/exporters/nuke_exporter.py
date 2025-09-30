@@ -83,7 +83,7 @@ class NukeExporter:
         self.logger.info(f"Generated CSV for Nuke export (no frame offset applied): {csv_path}")
         return str(csv_path)
     
-    def export_to_nuke(self, csv_path: str, output_path: str, frame_offset: int = 1001) -> str:
+    def export_to_nuke(self, csv_path: str, output_path: str, frame_offset: int = 1001, image_height: int = 1080) -> str:
         """
         Export tracking data to Nuke .nk file.
         
@@ -91,6 +91,7 @@ class NukeExporter:
             csv_path: Path to CSV file with tracking data
             output_path: Output path for .nk file
             frame_offset: Frame offset for image sequence start
+            image_height: Actual video height for coordinate transformation
         
         Returns:
             Path to generated .nk file
@@ -99,6 +100,7 @@ class NukeExporter:
             self.logger.info(f"Exporting to Nuke file: {output_path}")
             self.logger.info(f"Using CSV: {csv_path}")
             self.logger.info(f"Frame offset: {frame_offset}")
+            self.logger.info(f"Image height: {image_height}")
             
             # Use the external script to generate the .nk file
             result = subprocess.run([
@@ -107,12 +109,14 @@ class NukeExporter:
                 csv_path,
                 output_path,
                 str(frame_offset),
-                str(self.reference_frame)
+                str(self.reference_frame),
+                str(image_height)
             ], capture_output=True, text=True, cwd=Path(__file__).parent.parent.parent)
             
             if result.returncode == 0:
-                # Get the absolute path from the script output
-                absolute_path = result.stdout.strip()
+                # Get the absolute path from the script output (last line only)
+                output_lines = result.stdout.strip().split('\n')
+                absolute_path = output_lines[-1].strip()  # Take only the last line (the file path)
                 self.logger.info(f"Successfully exported to Nuke: {absolute_path}")
                 return absolute_path
             else:

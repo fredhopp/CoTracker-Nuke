@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 from typing import Optional, Tuple, Any
 import logging
+import os
 from pathlib import Path
 
 from ..core.app import CoTrackerNukeApp
@@ -31,6 +32,7 @@ class GradioInterface:
         
         # UI state
         self.preview_video_path = None
+        self.last_exported_path = None  # Store last exported .nk file path
     
     def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict]:
         """Load video and return status message + video path for player + slider update."""
@@ -198,10 +200,14 @@ class GradioInterface:
             # Create a root window and hide it
             root = tk.Tk()
             root.withdraw()
+            root.wm_attributes('-topmost', 1)  # Keep dialog on top
             
             # Get current output path directory
             current_path = self.get_default_output_path()
             current_dir = os.path.dirname(os.path.abspath(current_path))
+            
+            # Ensure output directory exists
+            os.makedirs(current_dir, exist_ok=True)
             
             # Open file dialog
             file_path = filedialog.asksaveasfilename(
@@ -227,15 +233,137 @@ class GradioInterface:
                     return file_path
             else:
                 # User cancelled, return current path
+                self.logger.info("File dialog cancelled by user")
                 return self.get_default_output_path()
                 
         except ImportError:
-            self.logger.warning("tkinter not available, using default path")
+            self.logger.warning("tkinter not available for file dialog, using default path")
             return self.get_default_output_path()
         except Exception as e:
             self.logger.error(f"Error in file browser: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return self.get_default_output_path()
     
+    def copy_to_clipboard(self, text: str) -> bool:
+        """Copy text to clipboard using multiple fallback methods with Windows 11 fixes."""
+        import sys
+        
+        try:
+            # Method 1: Try pyperclip (most reliable, especially on Windows 11)
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+                # Verify the copy worked
+                if pyperclip.paste() == text:
+                    self.logger.info("Clipboard copy successful via pyperclip")
+                    return True
+                else:
+                    self.logger.warning("pyperclip copy verification failed")
+            except ImportError:
+                self.logger.debug("pyperclip not available")
+            except Exception as e:
+                self.logger.warning(f"pyperclip failed: {e}")
+            
+            # Method 2: Windows-specific methods (better for Windows 11)
+            if sys.platform == "win32":
+                # Try Windows PowerShell method (more reliable on Windows 11)
+                try:
+                    import subprocess
+                    powershell_cmd = f'Set-Clipboard -Value "{text}"'
+                    result = subprocess.run(
+                        ['powershell', '-Command', powershell_cmd], 
+                        capture_output=True, 
+                        text=True, 
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        self.logger.info("Clipboard copy successful via PowerShell")
+                        return True
+                    else:
+                        self.logger.warning(f"PowerShell clipboard failed: {result.stderr}")
+                except Exception as e:
+                    self.logger.warning(f"PowerShell method failed: {e}")
+                
+                # Try traditional Windows clip command
+                try:
+                    import subprocess
+                    result = subprocess.run(['clip'], input=text, text=True, check=True, timeout=5)
+                    self.logger.info("Clipboard copy successful via Windows clip")
+                    return True
+                except Exception as e:
+                    self.logger.warning(f"Windows clip failed: {e}")
+            
+            # Method 3: Enhanced tkinter clipboard (with Windows 11 fixes)
+            try:
+                import tkinter as tk
+                import time
+                
+                root = tk.Tk()
+                root.withdraw()
+                root.wm_attributes('-topmost', 1)  # Windows 11 fix
+                
+                # Clear and set clipboard
+                root.clipboard_clear()
+                root.clipboard_append(text)
+                
+                # Multiple update calls for Windows 11 reliability
+                for _ in range(3):
+                    root.update_idletasks()
+                    root.update()
+                    time.sleep(0.01)  # Small delay for Windows 11
+                
+                # Verify clipboard content
+                try:
+                    clipboard_content = root.clipboard_get()
+                    if clipboard_content == text:
+                        self.logger.info("Clipboard copy successful via tkinter")
+                        root.destroy()
+                        return True
+                    else:
+                        self.logger.warning("tkinter clipboard verification failed")
+                except tk.TclError:
+                    self.logger.warning("Could not verify tkinter clipboard content")
+                
+                root.destroy()
+                
+            except Exception as e:
+                self.logger.warning(f"tkinter clipboard failed: {e}")
+            
+            # Method 4: Platform-specific fallbacks
+            if sys.platform == "darwin":
+                # macOS
+                try:
+                    import subprocess
+                    subprocess.run(['pbcopy'], input=text, text=True, check=True, timeout=5)
+                    self.logger.info("Clipboard copy successful via pbcopy")
+                    return True
+                except Exception as e:
+                    self.logger.warning(f"macOS pbcopy failed: {e}")
+                    
+            elif sys.platform.startswith("linux"):
+                # Linux - try xclip first, then xsel
+                try:
+                    import subprocess
+                    subprocess.run(['xclip', '-selection', 'clipboard'], input=text, text=True, check=True, timeout=5)
+                    self.logger.info("Clipboard copy successful via xclip")
+                    return True
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                    self.logger.warning(f"xclip failed: {e}")
+                    try:
+                        subprocess.run(['xsel', '--clipboard', '--input'], input=text, text=True, check=True, timeout=5)
+                        self.logger.info("Clipboard copy successful via xsel")
+                        return True
+                    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                        self.logger.warning(f"xsel failed: {e}")
+            
+            self.logger.error("All clipboard methods failed")
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Clipboard copy failed with exception: {e}")
+            return False
+
     def export_nuke_file(self, output_file_path, frame_offset: int) -> str:
         """Export to Nuke .nk file."""
         try:
@@ -262,6 +390,9 @@ class GradioInterface:
             # Export to Nuke
             nuke_path = self.app.export_to_nuke(output_path, frame_offset)
             
+            # Store the exported path for the copy button
+            self.last_exported_path = nuke_path
+            
             # Get tracking info for summary
             info = self.app.get_tracking_info()
             
@@ -276,6 +407,17 @@ class GradioInterface:
             error_msg = f"❌ Export failed: {str(e)}"
             self.logger.error(error_msg)
             return error_msg
+    
+    def copy_exported_path(self) -> str:
+        """Copy the last exported .nk file path to clipboard."""
+        if self.last_exported_path is None:
+            return "❌ No file has been exported yet. Please export a .nk file first."
+        
+        success = self.copy_to_clipboard(self.last_exported_path)
+        if success:
+            return f"📋 Copied to clipboard!\n{self.last_exported_path}"
+        else:
+            return f"⚠️ Could not copy to clipboard.\nPath: {self.last_exported_path}"
     
     def create_interface(self) -> gr.Blocks:
         """Create and return the Gradio interface."""
@@ -434,7 +576,7 @@ class GradioInterface:
                 )
             
             export_btn = gr.Button(
-                "📤 Export to Nuke",
+                "📤 Generate Tracker Node as .nk",
                 variant="primary",
                 size="lg"
             )
@@ -443,6 +585,18 @@ class GradioInterface:
                 label="📋 Export Status",
                 interactive=False,
                 lines=4
+            )
+            
+            copy_path_btn = gr.Button(
+                "📋 Copy .nk Path to Clipboard",
+                variant="primary",
+                size="lg"
+            )
+            
+            copy_status = gr.Textbox(
+                label="📋 Copy Status",
+                interactive=False,
+                lines=2
             )
             
             # Event handlers
@@ -524,6 +678,11 @@ class GradioInterface:
                 fn=self.export_nuke_file,
                 inputs=[output_file_path, image_sequence_start_frame],
                 outputs=[export_status]
+            )
+            
+            copy_path_btn.click(
+                fn=self.copy_exported_path,
+                outputs=[copy_status]
             )
             
         

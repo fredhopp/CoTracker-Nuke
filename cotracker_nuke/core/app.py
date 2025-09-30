@@ -183,13 +183,19 @@ class CoTrackerNukeApp:
         if self.tracking_results is None:
             raise ValueError("No tracking results available. Run track_points() first.")
         
+        if self.current_video is None:
+            raise ValueError("No video loaded.")
+        
         tracks, visibility = self.tracking_results
+        
+        # Get actual video height for coordinate transformation
+        video_height = self.current_video.shape[1]  # Shape is (T, H, W, C)
         
         # Generate CSV
         csv_path = self.exporter.generate_csv_for_nuke_export(tracks, visibility)
         
-        # Export to Nuke
-        nuke_path = self.exporter.export_to_nuke(csv_path, output_path, frame_offset)
+        # Export to Nuke with actual video height
+        nuke_path = self.exporter.export_to_nuke(csv_path, output_path, frame_offset, video_height)
         
         return nuke_path
     

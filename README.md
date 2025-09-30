@@ -4,6 +4,14 @@
 
 A powerful application that leverages Facebook Research's CoTracker for point tracking in videos and exports the tracking data in a format compatible with Foundry Nuke's CornerPin2D node.
 
+## Demo Video
+
+🎥 **See CoTracker-Nuke in action:**
+
+https://github.com/user/repo/blob/main/assets/demo/250929%20-%20DEV%20-%20CoTracker-Nuke%20-%20demo%2001.mp4
+
+*Complete workflow demonstration: video upload, masking, tracking and Nuke export*
+
 ## Features
 
 - 🎯 **Automatic Point Tracking**: Uses CoTracker3/CoTracker2 to track multiple points across video frames

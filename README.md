@@ -10,7 +10,7 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 
 *Complete workflow demonstration: video upload, masking, tracking and Nuke export*
 
-> **📺 [Watch the full demo on YouTube](https://youtu.be/zWHQrzYtVKw)**
+> **📺 [Watch the full demo on YouTube](https://youtu.be/zWHQrzYtVKw){:target="_blank"}**
 
 ## Features
 

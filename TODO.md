@@ -9,16 +9,14 @@
 ## Current Tasks
 
 ### 🚀 Future Enhancements (Optional)
+- [ ] **Export Formats** - Add support for other compositing software (Flame, etc.)
 - [ ] **Desktop App Conversion** - Convert Gradio web interface to PySide6 desktop app with native UI
 - [ ] **Cross-Platform Packaging** - Set up PyInstaller with spec file for Windows, macOS, and Linux builds
 - [ ] **Installer Creation** - Create installers for Windows (Inno Setup), macOS, and Linux distributions
 - [ ] **Rocky Linux Build** - Set up GitHub Actions workflow to build for Rocky Linux using Docker container
 - [ ] **Docker Build Environment** - Create Dockerfile.rocky with Rocky Linux 9 base image and dependencies
 - [ ] **Build Testing** - Test Rocky Linux build process and verify executable works on target system
-- [ ] **Export Formats** - Add support for other compositing software (Flame, After Effects, etc.)
-- [ ] **Batch Processing** - Add support for processing multiple videos at once
-- [ ] **Advanced Mask Tools** - Add more sophisticated masking options
-- [ ] **Performance Optimization** - Further optimize for very large numbers of tracks
+
 
 
 ### 🔧 Maintenance Tasks

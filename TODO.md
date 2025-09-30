@@ -16,7 +16,7 @@
 - [ ] **Rocky Linux Build** - Set up GitHub Actions workflow to build for Rocky Linux using Docker container
 - [ ] **Docker Build Environment** - Create Dockerfile.rocky with Rocky Linux 9 base image and dependencies
 - [ ] **Build Testing** - Test Rocky Linux build process and verify executable works on target system
-
+- [ ] **Grid Point Spacing** - Check if the grid of points is taking the ratio of image as a parameter to have checkerboard like spacing
 
 
 ### 🔧 Maintenance Tasks

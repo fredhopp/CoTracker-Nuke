@@ -8,7 +8,10 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 
 🎥 **See CoTracker-Nuke in action:**
 
-https://github.com/fredhopp/CoTracker-Nuke/blob/main/assets/demo/250929%20-%20DEV%20-%20CoTracker-Nuke%20-%20demo%2001.mp4
+<video width="800" controls>
+  <source src="assets/demo/250929 - DEV - CoTracker-Nuke - demo 01.mp4" type="video/mp4">
+  Your browser does not support the video tag. [Download the video](assets/demo/250929%20-%20DEV%20-%20CoTracker-Nuke%20-%20demo%2001.mp4) instead.
+</video>
 
 *Complete workflow demonstration: video upload, masking, tracking and Nuke export*
 

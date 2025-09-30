@@ -32,11 +32,11 @@ class GradioInterface:
         # UI state
         self.preview_video_path = None
     
-    def load_video_for_reference(self, reference_video) -> Tuple[str, Optional[str]]:
-        """Load video and return status message + video path for player."""
+    def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict]:
+        """Load video and return status message + video path for player + slider update."""
         try:
             if reference_video is None:
-                return "❌ No video file selected", None
+                return "❌ No video file selected", None, gr.update()
             
             # Load video
             self.app.load_video(reference_video)
@@ -54,23 +54,32 @@ class GradioInterface:
                          f"🎬 FPS: {fps_info}\n"
                          f"💾 Size: {info['memory_mb']:.1f} MB")
             
-            return status_msg, reference_video
+            # Calculate slider range
+            start_offset = start_frame_offset if start_frame_offset is not None else 1001
+            max_frame = start_offset + info['frames'] - 1
+            
+            self.logger.info(f"Initializing frame slider range: {start_offset} to {max_frame} (total frames: {info['frames']})")
+            
+            slider_update = gr.update(minimum=start_offset, maximum=max_frame, value=start_offset)
+            
+            return status_msg, reference_video, slider_update
                    
         except Exception as e:
             error_msg = f"❌ Error loading video: {str(e)}"
             self.logger.error(error_msg)
-            return error_msg, None
+            return error_msg, None, gr.update()
     
-    def update_frame_slider_range(self, reference_video) -> dict:
+    def update_frame_slider_range(self, reference_video, start_frame_offset) -> dict:
         """Update frame slider range when video is loaded."""
         try:
             if reference_video is None or self.app.current_video is None:
                 return gr.update()
             
             info = self.app.get_video_info()
-            # Get the current start frame offset (default to 1001)
-            start_offset = 1001  # This should ideally come from the interface
+            start_offset = start_frame_offset if start_frame_offset is not None else 1001
             max_frame = start_offset + info['frames'] - 1
+            
+            self.logger.info(f"Updating frame slider range: {start_offset} to {max_frame} (total frames: {info['frames']})")
             
             return gr.update(minimum=start_offset, maximum=max_frame, value=start_offset)
             
@@ -112,7 +121,7 @@ class GradioInterface:
             self.logger.error(error_msg)
             return None, None
     
-    def process_video(self, reference_video, grid_size: int) -> Tuple[str, Optional[str]]:
+    def process_video(self, reference_video, grid_size: int, image_sequence_start_frame: int = 1001) -> Tuple[str, Optional[str]]:
         """Process video with tracking and return status + preview video."""
         try:
             if reference_video is None:
@@ -124,19 +133,24 @@ class GradioInterface:
             # Track points
             tracks, visibility = self.app.track_points(grid_size)
             
-            # Create preview video
-            preview_points_per_axis = min(10, int(np.sqrt(grid_size * grid_size * 0.75)))
-            max_preview_points = preview_points_per_axis * preview_points_per_axis
-            
-            self.logger.info(f"Creating preview with {max_preview_points} points...")
-            preview_video_path = self.app.create_preview_video(max_preview_points)
+            # Create preview video with all points
+            self.logger.info(f"Creating preview with all generated points...")
+            preview_video_path = self.app.create_preview_video(frame_offset=image_sequence_start_frame)
             
             # Get tracking info
             info = self.app.get_tracking_info()
             
+            # Get reference frame and mask info
+            ref_frame_internal = self.app.reference_frame
+            ref_frame_display = ref_frame_internal + image_sequence_start_frame
+            has_mask = self.app.mask_handler.current_mask is not None
+            mask_status = "✅ Used" if has_mask else "❌ None"
+            
             status_msg = (f"✅ Tracking completed!\n"
                          f"🎯 Points tracked: {info['num_points']}\n"
                          f"📹 Frames: {info['num_frames']}\n"
+                         f"🎬 Reference frame: {ref_frame_display}\n"
+                         f"🎭 Mask: {mask_status}\n"
                          f"👁️ Visibility: {info['visibility_rate']:.1f}%\n"
                          f"📊 Total detections: {info['total_detections']}/{info['possible_detections']}\n"
                          f"🎬 Preview: {'Created successfully' if preview_video_path else 'Failed to create'}")
@@ -174,6 +188,53 @@ class GradioInterface:
         output_dir = Path("outputs")
         output_dir.mkdir(exist_ok=True)
         return f"outputs/CoTracker_{timestamp}.nk"
+    
+    def browse_output_folder(self) -> str:
+        """Open file dialog to browse for output location."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            # Create a root window and hide it
+            root = tk.Tk()
+            root.withdraw()
+            
+            # Get current output path directory
+            current_path = self.get_default_output_path()
+            current_dir = os.path.dirname(os.path.abspath(current_path))
+            
+            # Open file dialog
+            file_path = filedialog.asksaveasfilename(
+                title="Save Nuke file as...",
+                initialdir=current_dir,
+                defaultextension=".nk",
+                filetypes=[("Nuke files", "*.nk"), ("All files", "*.*")],
+                initialfile=os.path.basename(current_path)
+            )
+            
+            # Clean up the root window
+            root.destroy()
+            
+            if file_path:
+                # Convert to forward slashes and return relative path if possible
+                file_path = file_path.replace('\\', '/')
+                try:
+                    # Try to make it relative to current working directory
+                    rel_path = os.path.relpath(file_path)
+                    return rel_path.replace('\\', '/')
+                except ValueError:
+                    # If relative path fails, return absolute path
+                    return file_path
+            else:
+                # User cancelled, return current path
+                return self.get_default_output_path()
+                
+        except ImportError:
+            self.logger.warning("tkinter not available, using default path")
+            return self.get_default_output_path()
+        except Exception as e:
+            self.logger.error(f"Error in file browser: {e}")
+            return self.get_default_output_path()
     
     def export_nuke_file(self, output_file_path, frame_offset: int) -> str:
         """Export to Nuke .nk file."""
@@ -387,14 +448,13 @@ class GradioInterface:
             # Event handlers
             reference_video.change(
                 fn=self.load_video_for_reference,
-                inputs=[reference_video],
-                outputs=[video_status, video_player]
+                inputs=[reference_video, image_sequence_start_frame],
+                outputs=[video_status, video_player, frame_slider]
             )
             
-            # Update slider range when video loads
-            reference_video.change(
+            image_sequence_start_frame.change(
                 fn=self.update_frame_slider_range,
-                inputs=[reference_video],
+                inputs=[reference_video, image_sequence_start_frame],
                 outputs=[frame_slider]
             )
             
@@ -420,7 +480,7 @@ class GradioInterface:
             
             process_btn.click(
                 fn=self.process_video,
-                inputs=[reference_video, grid_size],
+                inputs=[reference_video, grid_size, image_sequence_start_frame],
                 outputs=[processing_status, preview_video]
             )
             
@@ -456,7 +516,7 @@ class GradioInterface:
             )
             
             file_picker_btn.click(
-                fn=lambda: gr.update(value=self.get_default_output_path()),
+                fn=lambda: gr.update(value=self.browse_output_folder()),
                 outputs=[output_file_path]
             )
             

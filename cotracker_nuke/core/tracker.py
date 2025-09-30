@@ -215,27 +215,18 @@ class CoTrackerEngine:
         video_tensor = video_tensor.permute(0, 3, 1, 2).unsqueeze(0)  # (1, T, C, H, W)
         
         with torch.no_grad():
-            if reference_frame == 0 and mask is None:
-                # Use automatic grid on first frame with bidirectional tracking (only if no mask)
-                pred_tracks, pred_visibility = self.cotracker_model(
-                    video_tensor, 
-                    grid_size=grid_size,
-                    backward_tracking=True
-                )
-                self.logger.info("Used automatic grid generation (no mask)")
-            else:
-                # Use custom queries with mask filtering and bidirectional tracking
-                mask_info = f" with mask ({np.sum(mask == 255)}/{mask.size} pixels)" if mask is not None else ""
-                self.logger.info(f"Using custom reference frame: {reference_frame} with bidirectional tracking{mask_info}")
-                
-                queries = self.generate_grid_queries(video, grid_size, reference_frame, mask)
-                self.logger.info(f"Generated {queries.shape[1] if len(queries.shape) > 1 else 0} query points for tracking")
-                
-                pred_tracks, pred_visibility = self.cotracker_model(
-                    video_tensor, 
-                    queries=queries,
-                    backward_tracking=True
-                )
+            # Always use custom queries to ensure proper grid generation
+            mask_info = f" with mask ({np.sum(mask == 255)}/{mask.size} pixels)" if mask is not None else " (no mask)"
+            self.logger.info(f"Using custom reference frame: {reference_frame} with bidirectional tracking{mask_info}")
+            
+            queries = self.generate_grid_queries(video, grid_size, reference_frame, mask)
+            self.logger.info(f"Generated {queries.shape[1] if len(queries.shape) > 1 else 0} query points for tracking")
+            
+            pred_tracks, pred_visibility = self.cotracker_model(
+                video_tensor, 
+                queries=queries,
+                backward_tracking=True
+            )
         
         self.logger.info(f"Tracking completed - Tracks shape: {pred_tracks.shape}, Visibility shape: {pred_visibility.shape}")
         

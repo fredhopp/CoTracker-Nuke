@@ -236,7 +236,7 @@ class CoTrackerNukeApp:
             'reference_frame': self.reference_frame
         }
     
-    def create_preview_video(self, max_preview_points: int = 75) -> Optional[str]:
+    def create_preview_video(self, frame_offset: int = 1001) -> Optional[str]:
         """Create preview video showing tracked points over time."""
         if self.tracking_results is None or self.current_video is None:
             return None
@@ -244,10 +244,10 @@ class CoTrackerNukeApp:
         tracks, visibility = self.tracking_results
         
         try:
-            self.logger.info(f"Creating preview video with {max_preview_points} points...")
+            self.logger.info(f"Creating preview video with all generated points...")
             preview_path = self._create_preview_video(
                 self.current_video, tracks, visibility, 
-                max_preview_points, self.reference_frame
+                self.reference_frame, frame_offset
             )
             self.logger.info(f"Preview video created: {preview_path}")
             return str(preview_path)
@@ -256,7 +256,7 @@ class CoTrackerNukeApp:
             return None
     
     def _create_preview_video(self, video: np.ndarray, tracks: torch.Tensor, 
-                             visibility: torch.Tensor, max_preview_points: int = 75, reference_frame: int = 0) -> str:
+                             visibility: torch.Tensor, reference_frame: int = 0, frame_offset: int = 1001) -> str:
         """Create preview video showing tracked points over time."""
         tracks_np = tracks[0].cpu().numpy()  # (T, N, 2)
         visibility_np = visibility[0].cpu().numpy()  # (T, N)
@@ -267,7 +267,6 @@ class CoTrackerNukeApp:
         
         # Select consistent points for preview
         total_points = tracks_np.shape[1]
-        max_points_to_show = min(total_points, max_preview_points)
         
         # Use reference frame to select points with good spatial distribution
         ref_frame_tracks = tracks_np[reference_frame]  # (N, 2)
@@ -277,12 +276,8 @@ class CoTrackerNukeApp:
         visible_mask = ref_frame_visibility > 0.5
         visible_indices = np.where(visible_mask)[0]
         
-        if len(visible_indices) <= max_points_to_show:
-            selected_point_indices = visible_indices.tolist()
-        else:
-            # Sample evenly distributed points
-            step = len(visible_indices) // max_points_to_show
-            selected_point_indices = visible_indices[::step][:max_points_to_show].tolist()
+        # Show ALL generated points to see the true grid pattern
+        selected_point_indices = visible_indices.tolist()
         
         self.logger.info(f"Selected {len(selected_point_indices)} points for preview")
         
@@ -314,8 +309,9 @@ class CoTrackerNukeApp:
             if scale_factor != 1.0:
                 frame = cv2.resize(frame, (new_width, new_height))
             
-            # Add frame number overlay
-            frame_text = f'Frame: {frame_idx}'
+            # Add frame number overlay with offset
+            display_frame = frame_idx + frame_offset
+            frame_text = f'Frame: {display_frame}'
             cv2.putText(frame, frame_text, (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)  # Black outline
             cv2.putText(frame, frame_text, (10, 30), 
@@ -351,7 +347,9 @@ class CoTrackerNukeApp:
             preview_frames.append(frame)
         
         # Save as temporary video file
-        temp_video_path = self.debug_dir / f"cotracker_preview_{os.getpid()}.mp4"
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        temp_video_path = self.debug_dir / f"cotracker_preview_{timestamp}.mp4"
         
         try:
             import imageio.v3 as iio

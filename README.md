@@ -110,6 +110,10 @@ The generated Nuke script includes:
 - **Memory Efficient**: Processes videos in chunks for large files
 - **Real-time Preview**: Fast preview generation for immediate feedback
 
+### CLI Support
+
+- **Status**: CLI functionalities not yet properly tested
+- **Future**: Command-line interface capabilities are planned for batch processing
 
 ### Common Issues
 

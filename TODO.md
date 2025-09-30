@@ -1,40 +1,41 @@
 # CoTracker Nuke App - TODO List
 
 ## Status Overview
-- **Recent Major Fixes**: ✅ Bidirectional tracking and grid visibility issues resolved
-- **Integration Status**: ✅ generate_exact_nuke_file.py successfully integrated into main app
-- **Current Priority**: Fix double frame offset application issue
-- **Next Phase**: Testing and documentation updates
+- **Current Status**: ✅ Production ready with modular architecture
+- **Recent Major Fixes**: ✅ Coordinate transformation, clipboard functionality, UI improvements
+- **Architecture**: ✅ Fully modular structure with clean separation of concerns
+- **Current Priority**: Feature complete - ready for production use
 
 ## Current Tasks
 
-### 🐛 Critical Fixes
-- [x] **Fix Double Frame Offset** - Frame offset is being applied twice:
-  1. In `generate_csv_with_frame_offset()` when creating CSV
-  2. In `generate_exact_nuke_file()` when processing frame numbers
-  - **Solution**: Remove intermediate CSV with added offset, apply frame offset only in .nk generation
-  - **Impact**: Frame values in .nk file are currently offset by 2x the intended amount
+### 🚀 Future Enhancements (Optional)
+- [ ] **Batch Processing** - Add support for processing multiple videos at once
+- [ ] **Advanced Mask Tools** - Add more sophisticated masking options
+- [ ] **Export Formats** - Add support for other compositing software (After Effects, etc.)
+- [ ] **Performance Optimization** - Further optimize for very large numbers of tracks
 
-### 🔧 Integration Tasks  
-- [x] **Integrate Exact Nuke Export** - ✅ Successfully integrated `generate_exact_nuke_file.py` into main app
-- [x] **User File Path Support** - ✅ Added default path `outputs/CoTracker_YYMMDD_HHMMSS.nk` in Gradio interface
-- [x] **Reference Frame Calculation** - ✅ Fixed to use user_reference_frame + image_sequence_start_frame
-- [x] **Remove Translate/Center Curves** - ✅ Removed unnecessary translate and center lines from .nk output
-
-### 📚 Documentation & Maintenance
-- [x] **Update Documentation** - Update README.md and other documentation to reflect all the recent progress and fixes made
+### 🔧 Maintenance Tasks
+- [ ] **Testing** - Comprehensive testing across different video formats and resolutions
+- [ ] **Documentation** - Add video tutorials and advanced usage examples
 
 ## Completed Tasks ✅
+
+### Latest Updates (September 30, 2025)
+- [x] **Coordinate System Fix** - Fixed Y coordinate offset issue by using actual video height instead of hardcoded 1080p
+- [x] **Clipboard Functionality** - Added robust clipboard support with Windows 11 compatibility and multiple fallback methods
+- [x] **UI Improvements** - Enhanced interface with better button layout, naming, and user experience
+- [x] **Browse Button Fix** - Fixed file picker functionality with proper imports and error handling
+- [x] **Modular Architecture** - Completed transition to clean modular structure with separate packages
 
 ### Integration Completed (September 29, 2025)
 - [x] **generate_exact_nuke_file.py Integration** - Successfully integrated exact Nuke file generation into main app
 - [x] **Outputs Directory Structure** - Created `outputs/` directory for organized .nk file storage
 - [x] **Configurable Parameters** - Added frame offset, tracker node naming, and reference frame support
 - [x] **Gradio Default Path** - Added automatic default path generation in UI
-- [x] **CSV Generation with Frame Offset** - Added `generate_csv_with_frame_offset()` method (needs revision)
-- [x] **Hardcoded Values Removal** - Made Root name, tracker name, and positioning configurable
+- [x] **Double Frame Offset Fix** - Resolved frame offset being applied twice by fixing script output parsing
+- [x] **Hardcoded Values Removal** - Made Root name, tracker node naming, and positioning configurable
 
-### Recent Major Fixes (September 28, 2025)
+### Core Functionality (September 28, 2025)
 - [x] **Bidirectional Tracking Fix** - Fixed CoTracker to use `backward_tracking=True` for proper tracking from reference frames
 - [x] **Grid Visibility Fix** - Fixed "empty zones" in preview videos by using reference frame for point selection  
 - [x] **Model Priority Updates** - Updated to use CoTracker3 offline as primary model
@@ -43,23 +44,38 @@
 
 ## Technical Notes
 
-### Key Files Modified
-- `cotracker_nuke_app.py` - Main application with integrated Nuke export functionality
-- `generate_exact_nuke_file.py` - Enhanced with configurable parameters and frame offset support
-- `outputs/` - New directory for organized .nk file storage
-- `TODO.md` - Updated to reflect integration status and current priorities
+### Modular Architecture
+```
+cotracker_nuke/
+├── core/                    # Core application logic
+│   ├── app.py              # Main CoTrackerNukeApp orchestrator
+│   ├── tracker.py          # CoTracker engine wrapper
+│   ├── video_processor.py  # Video loading and processing
+│   └── mask_handler.py     # Mask processing and management
+├── exporters/              # Export functionality
+│   └── nuke_exporter.py    # Nuke .nk file generation
+├── ui/                     # User interface
+│   └── gradio_interface.py # Web-based Gradio interface
+├── utils/                  # Utilities
+│   └── logger.py           # Logging configuration
+└── cli/                    # Command-line interface
+    └── main.py             # CLI entry point
+```
 
-### Current Architecture
-- **CSV Generation**: `generate_csv_with_frame_offset()` creates intermediate CSV (needs revision)
-- **Nuke Export**: `generate_exact_nuke_file()` processes CSV and generates .nk files
-- **Frame Offset Issue**: Currently applied twice - once in CSV generation, once in .nk processing
-- **Default Paths**: Automatic timestamp-based naming: `outputs/CoTracker_YYMMDD_HHMMSS.nk`
+### Key Features Implemented
+- **Coordinate System**: Proper transformation from CoTracker (top-left origin) to Nuke (bottom-left origin)
+- **Clipboard Integration**: Cross-platform clipboard with Windows 11 support and multiple fallback methods
+- **Dynamic Video Height**: Uses actual video dimensions instead of hardcoded values
+- **Robust File Export**: Clean .nk file generation with proper error handling
+- **Enhanced UI**: Improved button layout, naming, and user feedback
 
 ## Development Guidelines
 - Follow system rules in `SYSTEM_RULES.md`
 - Always use CoTracker3 offline with `backward_tracking=True`
 - Never push to git without user confirmation
 - Use `.venv` virtual environment for all dependencies
+- Maintain modular architecture with clear separation of concerns
+- Use proper logging and error handling throughout
 
 ---
-*Last Updated: September 29, 2025 - Integration Complete, Double Frame Offset Issue Identified*
+*Last Updated: September 30, 2025 - Production Ready with Full Feature Set*

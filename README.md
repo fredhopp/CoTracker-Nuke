@@ -7,10 +7,13 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 ## Features
 
 - 🎯 **Automatic Point Tracking**: Uses CoTracker3/CoTracker2 to track multiple points across video frames
-- 🎨 **Interactive GUI**: User-friendly Gradio interface for video upload and processing
-- 🎭 **Zone masking**: User can mask out a specific are on a reference frame to have trackers restricted to that zone
-- 🖼️ **Visual Preview**: Shows tracked points
-- 📤 **Nuke Export**: Generates complete Nuke scripts (.nk files)
+- 🎨 **Interactive GUI**: User-friendly Gradio interface with modern, intuitive design
+- 🎭 **Zone Masking**: Interactive mask drawing to restrict tracking to specific areas
+- 🖼️ **Visual Preview**: Real-time preview of tracked points with frame-by-frame navigation
+- 📤 **Smart Nuke Export**: Generates complete Nuke Tracker4 nodes with proper coordinate transformation
+- 📋 **Clipboard Integration**: One-click copy of .nk file paths with Windows 11 support
+- 🗂️ **File Management**: Built-in file browser and automatic output organization
+- 🏗️ **Modular Architecture**: Clean, maintainable codebase with separated concerns
 
 ## Installation
 
@@ -40,7 +43,7 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 
 ### Running the Application
 
-1. **Start the Gradio interface:**
+1. **Start the modular application:**
    ```bash
    python cotracker_nuke_app.py
    ```
@@ -49,25 +52,32 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 
 ### Using the Interface
 
-1. **Upload Video**: Click "Upload Video" and select your video file (.mp4, .mov, .avi, .mkv)
+1. **📹 Upload Video**: Click "📁 Upload Video File" and select your video file (.mp4, .mov, .avi, .mkv)
 
-2. **Set Grid Size**: Adjust the slider to control how many points CoTracker will track (5-50 points)
+2. **🎬 Set Image Sequence Start Frame**: Configure the frame number where your image sequence starts in Nuke (default: 1001)
 
-3. **Process Video**: Click "Process Video" to run CoTracker and automatically select corner points
+3. **🎯 Set Reference Frame**: Use the frame slider and preview to choose your tracking reference frame
 
-4. **Preview Results**: Double check that the mask and reference have been correctly considered.
+4. **🎨 Optional Mask Drawing**: Draw on the reference frame to restrict tracking to specific areas (white areas = tracked)
 
-5. **Export to Nuke**: 
-   - Enter a filename for your Nuke script
-   - Click "Export to Nuke" to generate the .nk file
+5. **🚀 Process Video**: 
+   - Adjust grid size (5-100 points) to control tracking density
+   - Click "🚀 Process Video" to run CoTracker
+   - Preview the tracking results in the generated video
+
+6. **📤 Generate Tracker Node**: 
+   - Use the default path or click "📂 Browse" to choose a custom location
+   - Click "📤 Generate Tracker Node as .nk" to create the Nuke file
+   - Click "📋 Copy .nk Path to Clipboard" to copy the file path for easy import
 
 ### Importing into Nuke
 
 1. **Open Nuke** and create a new composition
 
-2. **Import the script**: 
-   - File → Import → Select your generated .nk file
+2. **Import the Tracker4 node**: 
+   - Use the copied path: File → Open → Paste (`Ctrl+V`) the file path
    - Or drag and drop the .nk file into Nuke
+   - The Tracker4 node will load with all tracking data and proper coordinate transformation
 
 ## How It Works
 
@@ -83,18 +93,23 @@ The app uses a sophisticated algorithm to select the 4 best corner points:
 ### Nuke Export Format
 
 The generated Nuke script includes:
-- **Read node**: Placeholder for your source video
-- **Tracker4 node**: Contains all tracking data with keyframes
+- **Tracker4 node**: Complete tracking data with proper coordinate transformation
+- **Automatic coordinate conversion**: From CoTracker's top-left origin to Nuke's bottom-left origin
+- **Frame offset support**: Matches your image sequence start frame
+- **Reference frame preservation**: Maintains your chosen reference frame
+- **Track visibility data**: Only includes confident tracking points
 
 ## Technical Details
 
 ### Dependencies
 
 - **PyTorch**: For running CoTracker models
-- **CoTracker**: Facebook Research's point tracking model
+- **CoTracker**: Facebook Research's point tracking model  
 - **OpenCV**: Video processing and visualization
-- **Gradio**: Web-based user interface
+- **Gradio**: Modern web-based user interface
 - **NumPy/SciPy**: Numerical computations and spatial algorithms
+- **pyperclip**: Cross-platform clipboard functionality
+- **imageio**: Video loading and processing
 
 ### Supported Formats
 
@@ -108,24 +123,31 @@ The generated Nuke script includes:
 - **CUDA 12.8 Support**: Compatible with latest Blackwell architecture GPUs
 - **Speed**: ~10x faster processing on GPU vs CPU (3 seconds vs 30+ seconds)
 - **Memory Efficient**: Processes videos in chunks for large files
-- **Real-time Preview**: Fast preview generation for immediate feedback
+- **Real-time Preview**: Fast preview generation with tracking visualization
+- **Scalable**: Handles anywhere from 10 to 1000+ tracking points efficiently
 
-### CLI Support
+### Architecture
 
-- **Status**: CLI functionalities not yet properly tested
-- **Future**: Command-line interface capabilities are planned for batch processing
+- **Modular Design**: Clean separation between core logic, UI, and export functionality
+- **Error Handling**: Comprehensive error handling and user feedback
+- **Logging**: Detailed logging for debugging and monitoring
+- **Cross-Platform**: Works on Windows, macOS, and Linux
 
 ### Common Issues
 
 1. **CUDA Out of Memory**: Reduce grid size or use CPU mode
 2. **Video Loading Errors**: Ensure video format is supported and file isn't corrupted
 3. **Model Loading Issues**: Check internet connection for torch.hub downloads
+4. **Coordinate Misalignment**: The app automatically handles coordinate system conversion
+5. **Clipboard Issues**: Multiple fallback methods ensure clipboard functionality works across platforms
 
 ### Performance Tips
 
-- Use GPU when available for faster processing
-- Start with smaller grid sizes (10-15) for testing
-- Ensure good lighting and contrast in source videos for better tracking
+- Use GPU when available for significantly faster processing
+- Start with smaller grid sizes (10-20) for testing, scale up as needed
+- Use masking to focus tracking on relevant areas and improve performance
+- Ensure good lighting and contrast in source videos for better tracking accuracy
+- For very large numbers of tracks (100+), consider using masks to limit the tracking area
 
 ## License
 

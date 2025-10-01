@@ -501,7 +501,8 @@ class GradioInterface:
                         label="🖼️ Reference Frame - Draw Mask",
                         type="pil",
                         brush=gr.Brush(colors=["#FFFFFF", "#000000"], default_size=20),
-                        height=400
+                        height=400,
+                        interactive=True
                     )
                 
                 with gr.Column(scale=1):
@@ -524,10 +525,10 @@ class GradioInterface:
                 with gr.Column(scale=2):
                     grid_size = gr.Slider(
                         minimum=5,
-                        maximum=100,
+                        maximum=400,
                         step=1,
                         value=40,
-                        label="🔢 Grid Size (Points per Side)",
+                        label="🔢 Grid Size (Points on Longest Side)",
                         info="Higher values = more tracking points"
                     )
                     
@@ -625,9 +626,9 @@ class GradioInterface:
                 outputs=[frame_display]
             )
             
-            # Check VRAM warning when grid size changes
-            grid_size.change(
-                fn=self.check_vram_warning,
+            # Update grid info on slider release
+            grid_size.release(
+                fn=self.calculate_grid_info,
                 inputs=[grid_size],
                 outputs=[vram_warning]
             )
@@ -662,9 +663,9 @@ class GradioInterface:
                 outputs=[mask_result]
             )
             
-            # Update VRAM warning when mask is used
+            # Update grid info when mask is used
             use_mask_btn.click(
-                fn=self.check_vram_warning,
+                fn=self.calculate_grid_info,
                 inputs=[grid_size],
                 outputs=[vram_warning]
             )
@@ -725,6 +726,54 @@ class GradioInterface:
             self.logger.error(f"Error displaying frame {frame_number_with_offset}: {str(e)}")
             return None
     
+    def calculate_grid_info(self, grid_size: int) -> dict:
+        """Calculate and display grid point information in VRAM warning area."""
+        try:
+            # Get video dimensions if available
+            if self.app.video_processor.current_video is not None:
+                height, width = self.app.video_processor.current_video.shape[1:3]
+                
+                # Calculate grid dimensions based on aspect ratio
+                if width >= height:
+                    grid_width = grid_size
+                    grid_height = max(1, int(round(grid_size * height / width)))
+                else:
+                    grid_height = grid_size
+                    grid_width = max(1, int(round(grid_size * width / height)))
+                
+                total_points = grid_width * grid_height
+                
+                # Check if mask is available
+                has_mask = self.app.mask_handler.current_mask is not None
+                
+                if has_mask:
+                    mask = self.app.mask_handler.current_mask
+                    white_pixels = np.sum(mask == 255)
+                    total_pixels = mask.shape[0] * mask.shape[1]
+                    coverage = white_pixels / total_pixels
+                    estimated_masked_points = int(total_points * coverage)
+                    
+                    info_text = f"📊 Grid: {grid_width}×{grid_height} = {total_points:,} points\n✅ With mask: ≈{estimated_masked_points:,} points ({coverage*100:.1f}% coverage)"
+                    
+                    # Add VRAM warning if masked points exceed 300
+                    if estimated_masked_points > 300:
+                        info_text += f"\n⚠️ High VRAM usage: {estimated_masked_points:,} points may cause GPU memory issues"
+                else:
+                    info_text = f"📊 Grid: {grid_width}×{grid_height} = {total_points:,} points (no mask)"
+                    
+                    # Add VRAM warning if total points exceed 300
+                    if total_points > 300:
+                        info_text += f"\n⚠️ High VRAM usage: {total_points:,} points may cause GPU memory issues"
+                
+                # Show in VRAM warning area
+                return gr.update(value=info_text, visible=True)
+            else:
+                return gr.update(value="⚠️ Load video first to calculate points", visible=True)
+                
+        except Exception as e:
+            self.logger.error(f"Error calculating grid info: {e}")
+            return gr.update(value="❌ Error calculating points", visible=True)
+    
     def check_vram_warning(self, grid_size: int) -> dict:
         """Check if VRAM warning should be displayed."""
         try:
@@ -733,8 +782,11 @@ class GradioInterface:
                 has_mask = self.app.mask_handler.current_mask is not None
                 
                 if not has_mask:
+                    # Estimate points (actual count depends on aspect ratio)
+                    # For 16:9 (most common): grid_size * (grid_size * 9/16)
+                    estimated_points = int(grid_size * grid_size * 0.56)  # Approximate for 16:9
                     warning_msg = (f"⚠️ High VRAM usage warning!\n"
-                                 f"Grid size {grid_size} without mask = {grid_size * grid_size:,} points.\n"
+                                 f"Grid size {grid_size} without mask ≈ {estimated_points:,} points (aspect-ratio adjusted).\n"
                                  f"Consider using a mask or reducing grid size to avoid GPU memory issues.")
                     return gr.update(value=warning_msg, visible=True)
             

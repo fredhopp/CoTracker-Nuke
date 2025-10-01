@@ -59,11 +59,11 @@ class CoTrackerEngine:
     def generate_grid_queries(self, video: np.ndarray, grid_size: int, 
                              reference_frame: int, mask: Optional[np.ndarray] = None) -> torch.Tensor:
         """
-        Generate grid query points for tracking.
+        Generate grid query points for tracking with aspect ratio consideration.
         
         Args:
             video: Video array (T, H, W, C)
-            grid_size: Grid size for point generation
+            grid_size: Grid size for point generation (points on the longest side)
             reference_frame: Reference frame index
             mask: Optional mask for filtering points
         
@@ -76,15 +76,26 @@ class CoTrackerEngine:
         # Get video dimensions
         height, width = video.shape[1], video.shape[2]
         
-        # Create grid points on the reference frame
-        x_step = width / (grid_size - 1) if grid_size > 1 else width / 2
-        y_step = height / (grid_size - 1) if grid_size > 1 else height / 2
+        # Calculate grid size for both dimensions based on aspect ratio
+        # User specifies grid_size for the longest side
+        if width >= height:
+            # Width is longest
+            grid_width = grid_size
+            grid_height = max(1, int(round(grid_size * height / width)))
+        else:
+            # Height is longest
+            grid_height = grid_size
+            grid_width = max(1, int(round(grid_size * width / height)))
+        
+        # Create grid points on the reference frame with proper spacing
+        x_step = width / (grid_width - 1) if grid_width > 1 else width / 2
+        y_step = height / (grid_height - 1) if grid_height > 1 else height / 2
         
         queries = []
-        for i in range(grid_size):
-            for j in range(grid_size):
-                x = int(j * x_step) if grid_size > 1 else width // 2
-                y = int(i * y_step) if grid_size > 1 else height // 2
+        for i in range(grid_height):
+            for j in range(grid_width):
+                x = int(j * x_step) if grid_width > 1 else width // 2
+                y = int(i * y_step) if grid_height > 1 else height // 2
                 
                 # Ensure coordinates are within bounds
                 x = max(0, min(x, width - 1))
@@ -96,7 +107,8 @@ class CoTrackerEngine:
         # Convert to tensor format expected by CoTracker
         queries_tensor = torch.tensor([queries], dtype=torch.float32, device=self.device)
         
-        self.logger.info(f"Generated {len(queries)} query points ({grid_size}x{grid_size}) on frame {reference_frame}")
+        self.logger.info(f"Generated {len(queries)} query points ({grid_width}x{grid_height}) on frame {reference_frame} (aspect-ratio adjusted)")
+        self.logger.debug(f"Video dimensions: {width}x{height}, Grid dimensions: {grid_width}x{grid_height}")
         self.logger.debug(f"Query tensor shape before mask filtering: {queries_tensor.shape}")
         
         # Apply mask filtering if mask is available

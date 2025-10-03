@@ -1001,7 +1001,7 @@ class GradioInterface:
             gr.Markdown("## 📹 Step 1: Upload Video")
             reference_video = gr.File(
                 label="📁 Upload Video File",
-                file_types=[".mp4", ".mov", ".avi", ".mkv"],
+                file_types=[".mp4", ".mov", ".avi", ".mkv", ".webm"],
                 type="filepath"
             )
             

@@ -25,8 +25,12 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 - ⚡ **Performance Optimization**: Smart bounding box processing for 10-20x speed improvements
 - 📊 **Progress Tracking**: Real-time progress bars for both tracking and STMap generation
 - 📋 **Clipboard Integration**: One-click copy of .nk file paths with Windows 11 support
-- 🗂️ **File Management**: Built-in file browser and automatic output organization
+- 🗂️ **File Management**: Built-in file browser and automatic output organization with absolute paths
 - 🏗️ **Modular Architecture**: Clean, maintainable codebase with separated concerns
+- 🎨 **Clean UI Design**: Organized interface with grouped browse buttons and dynamic path variables
+- 🔧 **Dynamic Path Variables**: Support for %refFrame% in output paths for organized file management
+- 📝 **Enhanced Metadata**: EXR files include comprehensive metadata for traceability
+- 🧹 **Project Cleanup**: Clean project structure with removed test/debug files
 
 ## Installation
 
@@ -79,13 +83,14 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
    - Preview the tracking results in the generated video
 
 6. **📤 Generate Tracker Node**: 
-   - Use the default path or click "📂 Browse" to choose a custom location
+   - Use the default absolute path or click "📂 Browse" to choose a custom location
    - Click "📤 Generate Tracker Node as .nk" to create the Nuke file
    - Click "📋 Copy .nk Path to Clipboard" to copy the file path for easy import
 
 7. **🗺️ Generate STMap Sequence** (Optional):
    - Choose interpolation method (linear or cubic) and bit depth (16-bit or 32-bit)
    - Set frame range for STMap export (defaults to full sequence)
+   - Use dynamic path variables like %refFrame% for organized output
    - Click "🗺️ Generate STMap Sequence" to create animated RGBA EXR files
    - View real-time progress bar during generation
    - Click "📋 Copy STMap Directory Path" to copy the output folder path

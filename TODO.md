@@ -1,14 +1,18 @@
 # CoTracker Nuke App - TODO List
 
 ## Status Overview
-- **Current Status**: ✅ Production ready with optimized STMap generation and unified processing
-- **Recent Major Features**: ✅ Delaunay hull detection + unified mask/STMap processing + performance optimization
+- **Current Status**: ✅ Production ready with advanced STMap generation, unified processing, and clean UI
+- **Recent Major Features**: ✅ Delaunay hull detection + unified mask/STMap processing + performance optimization + UI consolidation + project cleanup
 - **Architecture**: ✅ Fully modular structure with clean separation of concerns
-- **Current Priority**: Feature complete - ready for production use with advanced STMap and optimized processing
+- **Current Priority**: Feature complete - ready for production use with advanced STMap, optimized processing, and clean interface
 
 ## Current Tasks
 
 ### 🚀 Future Enhancements (Optional)
+- [ ] **STMap Performance Optimization** - Make STMap processing and EXR exports faster by executing frames in parallel:
+  - Test first frame export and measure CPU/RAM performance
+  - Extend parallel processing to available CPUs without exceeding available RAM
+  - Consider pushing calculations to GPU if still slow
 - [ ] **Export Formats** - Add support for other compositing software (Flame, etc.)
 - [ ] **Desktop App Conversion** - Convert Gradio web interface to PySide6 desktop app with native UI
 - [ ] **Cross-Platform Packaging** - Set up PyInstaller with spec file for Windows, macOS, and Linux builds
@@ -16,6 +20,7 @@
 - [ ] **Rocky Linux Build** - Set up GitHub Actions workflow to build for Rocky Linux using Docker container
 - [ ] **Docker Build Environment** - Create Dockerfile.rocky with Rocky Linux 9 base image and dependencies
 - [ ] **Build Testing** - Test Rocky Linux build process and verify executable works on target system
+- [ ] **EXR Metadata Investigation** - Investigate why custom EXR metadata (referenceFrame) is not appearing in Nuke despite being written correctly to file header
 - [x] **Grid Point Spacing** - Check if the grid of points is taking the ratio of image as a parameter to have checkerboard like spacing
 - [ ] **Frame Rate Handling** - Check if the video is working at a set 24fps or properly considering 23.976 fps
 - [ ] **STMap Advanced Interpolation** - Implement memory-efficient bicubic interpolation for STMap generation (Delaunay removed due to memory issues)
@@ -43,7 +48,19 @@
 
 ## Completed Tasks ✅
 
-### Latest Updates (October 2, 2025)
+### Latest Updates (October 3, 2025)
+- [x] **UI Organization Improvements** - Put browse buttons inside same frame as output paths for better organization
+- [x] **Absolute Path Implementation** - All default output paths (.nk and .exr) now use absolute paths instead of relative
+- [x] **Dynamic Path Variables** - Implemented %refFrame% support for organized output file management
+- [x] **Reference Frame Calculation Fix** - Fixed reference frame calculation to include start frame offset in path variables
+- [x] **STMap Method Consolidation** - Removed old regular STMap export method, only enhanced STMap (with alpha) remains
+- [x] **Animated Mask Export Removal** - Removed separate animated mask export section (mask now embedded in STMap alpha)
+- [x] **Project Cleanup** - Removed unnecessary test and debug files for cleaner project structure
+- [x] **UI Label Updates** - Updated labels to ".nk Output File Path" and "STMap Output File Path" without folder icons
+- [x] **EXR Metadata Simplification** - Simplified metadata to just referenceFrame for now, removed problematic fields
+- [x] **Coordinate Offset Fix** - Fixed -0.5, 0.5 pixel offset issue in STMap coordinates for Nuke compatibility
+
+### Previous Updates (October 2, 2025)
 - [x] **Delaunay Hull Detection** - Replaced unreliable NaN-based hull detection with accurate Delaunay triangulation
 - [x] **Unified Processing Logic** - Mask warping and STMap processing now use identical hull detection and processing methods
 - [x] **Segment-Based Fringe Algorithm** - Renamed and optimized fringe coordinate calculation with proper geometric projection
@@ -138,4 +155,4 @@ cotracker_nuke/
 - Use proper logging and error handling throughout
 
 ---
-*Last Updated: October 2, 2025 - Production Ready with Optimized STMap Generation and Unified Processing Systems*
+*Last Updated: October 3, 2025 - Production Ready with Advanced STMap Generation, Unified Processing, Clean UI, and Project Cleanup*

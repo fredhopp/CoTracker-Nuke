@@ -236,7 +236,7 @@ class STMapExporter:
             # Create output directory from provided path or generate default
             if output_file_path is None or output_file_path.strip() == "":
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_file_path = f"outputs/CoTracker_{timestamp}_enhanced_stmap/CoTracker_{timestamp}_enhanced_stmap.%04d.exr"
+                output_file_path = f"outputs/CoTracker_{timestamp}_stmap/CoTracker_{timestamp}_stmap.%04d.exr"
             
             # Extract directory from file path pattern
             output_dir = Path(output_file_path).parent
@@ -251,32 +251,29 @@ class STMapExporter:
                 if frame_idx % 10 == 0:  # Log every 10 frames
                     self.logger.info(f"Processing enhanced STMap frame {frame_idx}/{end_idx}")
                 
-                # Check if this is the reference frame
-                if frame_idx == ref_frame_idx:
-                    # For reference frame: create perfect identity gradient for ALL pixels
+                # Process ALL frames through the enhanced algorithm (including reference frame)
+                # This allows proper debugging and ensures the algorithm works correctly
+                current_tracks = tracks_np[frame_idx]
+                current_visibility = visibility_np[frame_idx]
+                
+                # Filter visible current trackers (same indices as reference)
+                visible_current_tracks = current_tracks[visible_mask]
+                current_visibility_values = current_visibility[visible_mask]
+                valid_trackers = current_visibility_values > 0.5
+                
+                if not np.any(valid_trackers):
+                    # If no valid trackers, create identity STMap with original mask
                     stmap = self._generate_identity_stmap_with_mask(mask)
                 else:
-                    # Get current frame tracks
-                    current_tracks = tracks_np[frame_idx]
-                    current_visibility = visibility_np[frame_idx]
-                    
-                    # Filter visible current trackers (same indices as reference)
-                    visible_current_tracks = current_tracks[visible_mask]
-                    current_visibility_values = current_visibility[visible_mask]
-                    valid_trackers = current_visibility_values > 0.5
-                    
-                    if not np.any(valid_trackers):
-                        # If no valid trackers, create identity STMap with original mask
-                        stmap = self._generate_identity_stmap_with_mask(mask)
-                    else:
-                        # Generate enhanced STMap with intelligent interpolation
-                        stmap = self._generate_enhanced_frame_stmap(
-                            mask, 
-                            visible_reference_tracks, 
-                            visible_current_tracks,
-                            valid_trackers,
-                            interpolation_method
-                        )
+                    # Generate enhanced STMap with intelligent interpolation
+                    # This will naturally produce identity at reference frame due to algorithm design
+                    stmap = self._generate_enhanced_frame_stmap(
+                        mask, 
+                        visible_reference_tracks, 
+                        visible_current_tracks,
+                        valid_trackers,
+                        interpolation_method
+                    )
                 
                 # Save as RGBA EXR
                 actual_frame_number = frame_idx + frame_offset
@@ -284,7 +281,7 @@ class STMapExporter:
                 if output_file_path and "%04d" in output_file_path:
                     filename = Path(output_file_path).name % actual_frame_number
                 else:
-                    filename = f"CoTracker_{timestamp}_enhanced_stmap.{actual_frame_number:04d}.exr"
+                    filename = f"CoTracker_{timestamp}_stmap.{actual_frame_number:04d}.exr"
                 frame_path = output_dir / filename
                 
                 self.logger.debug(f"Saving enhanced STMap frame {actual_frame_number} to {frame_path}")
@@ -647,13 +644,17 @@ class STMapExporter:
             # Note: We warp the original mask, not the resized one, to avoid double-masking
             warped_mask = self._warp_mask_with_segment_algorithm(mask, reference_tracks, current_tracks)
             
-            # 2. Create coordinate grids
-            y_coords, x_coords = np.mgrid[0:height, 0:width]
+            # 2. Calculate smart processing bounds
+            min_x, min_y, max_x, max_y = self._calculate_processing_bounds(mask, reference_tracks)
+            
+            # 3. Create coordinate grids only for the bounding box area
+            y_coords, x_coords = np.mgrid[min_y:max_y+1, min_x:max_x+1]
             points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
             
-            # 3. Only process pixels inside the warped mask (much faster!)
-            warped_mask_bool = warped_mask > 0
+            # 4. Only process pixels inside the warped mask (much faster!)
+            warped_mask_bool = warped_mask[min_y:max_y+1, min_x:max_x+1] > 0
             warped_mask_indices = np.where(warped_mask_bool.ravel())[0]
+            
             
             # Initialize STMap coordinates (will remain 0 for pixels outside warped mask)
             stmap_coords = np.zeros((len(points), 2), dtype=np.float32)
@@ -674,10 +675,12 @@ class STMapExporter:
                         current_tracks, reference_tracks, warped_pixels
                     )
                 
-                # Identify pixels outside hull (NaN coordinates)
-                nan_mask = np.isnan(interpolated_coords).any(axis=1)
-                outside_hull_indices = np.where(nan_mask)[0]
-                inside_hull_indices = np.where(~nan_mask)[0]
+                # Identify pixels inside/outside hull using Delaunay triangulation
+                inside_hull_mask = self._is_inside_delaunay_hull(warped_pixels, current_tracks)
+                inside_hull_indices = np.where(inside_hull_mask)[0]
+                outside_hull_indices = np.where(~inside_hull_mask)[0]
+                
+                self.logger.debug(f"Hull detection: {len(outside_hull_indices)} pixels outside hull, {len(inside_hull_indices)} pixels inside hull")
                 
                 # Set coordinates for pixels inside hull
                 if len(inside_hull_indices) > 0:
@@ -688,15 +691,17 @@ class STMapExporter:
                     self.logger.debug(f"Processing {len(outside_hull_indices)} pixels outside hull with segment-based algorithm")
                     
                     outside_hull_pixels = warped_pixels[outside_hull_indices]
-                    outside_hull_coords = self._calculate_block_offset_coordinates(
+                    outside_hull_coords = self._calculate_fringe_coordinates(
                         outside_hull_pixels, reference_tracks, current_tracks
                     )
                     
                     # Update the coordinates for pixels outside hull
                     stmap_coords[warped_mask_indices[outside_hull_indices]] = outside_hull_coords
             
-            # 4. Reshape to image dimensions
-            stmap_2d = stmap_coords.reshape(height, width, 2)
+            # 4. Reshape to bounding box dimensions and place in full image
+            stmap_2d = np.zeros((height, width, 2), dtype=np.float32)
+            stmap_bbox = stmap_coords.reshape(max_y - min_y + 1, max_x - min_x + 1, 2)
+            stmap_2d[min_y:max_y+1, min_x:max_x+1] = stmap_bbox
             
             # 5. Convert to Nuke coordinates
             stmap_2d = self._convert_to_nuke_coordinates(stmap_2d)
@@ -704,11 +709,11 @@ class STMapExporter:
             # 6. Create RGBA array: R=X, G=Y, B=0, A=warped_mask
             stmap = np.zeros((height, width, 4), dtype=np.float32)
             
-            # Set STMap coordinates only for pixels inside the warped mask
-            stmap[warped_mask_bool, 0] = stmap_2d[warped_mask_bool, 0]  # R = X coordinates
-            stmap[warped_mask_bool, 1] = stmap_2d[warped_mask_bool, 1]  # G = Y coordinates
-            stmap[warped_mask_bool, 2] = 0.0                            # B = 0 (unused)
-            stmap[:, :, 3] = warped_mask.astype(np.float32) / 255.0     # A = warped mask (all pixels)
+            # Set STMap coordinates for the bounding box area
+            stmap[min_y:max_y+1, min_x:max_x+1, 0] = stmap_2d[min_y:max_y+1, min_x:max_x+1, 0]  # R = X coordinates
+            stmap[min_y:max_y+1, min_x:max_x+1, 1] = stmap_2d[min_y:max_y+1, min_x:max_x+1, 1]  # G = Y coordinates
+            stmap[min_y:max_y+1, min_x:max_x+1, 2] = 0.0                                        # B = 0 (unused)
+            stmap[:, :, 3] = warped_mask.astype(np.float32) / 255.0                             # A = warped mask (all pixels)
             
             return stmap
             
@@ -717,19 +722,19 @@ class STMapExporter:
             # Fallback to identity STMap with original mask
             return self._generate_identity_stmap_with_mask(mask)
     
-    def _calculate_block_offset_coordinates(self, 
-                                          pixel_coords: np.ndarray,
-                                          reference_tracks: np.ndarray,
-                                          current_tracks: np.ndarray) -> np.ndarray:
+    def _calculate_fringe_coordinates(self, 
+                                    pixel_coords: np.ndarray,
+                                    reference_tracks: np.ndarray,
+                                    current_tracks: np.ndarray) -> np.ndarray:
         """
-        Calculate STMap coordinates for fringe pixels using block offset algorithm.
+        Calculate STMap coordinates for fringe pixels using segment-based algorithm.
         
         For each pixel C' in current frame:
         1. Find closest tracker segment A'B' (two nearest trackers)
-        2. Project C' perpendicularly onto A'B' → get point D'
-        3. Map D' to reference frame: D = A + t * (B - A) where t = A'D' / A'B'
-        4. Construct perpendicular through D in reference frame
-        5. Find C on perpendicular: DC = (|AB| / |A'B'|) * |D'C'|
+        2. Project C' perpendicularly onto A'B' → get point P'
+        3. Map P' to reference frame: P = A + t * (B - A) where t = A'P' / A'B'
+        4. Construct perpendicular through P in reference frame
+        5. Find C on perpendicular: PC = (|AB| / |A'B'|) * |P'C'|
         6. Return C's coordinates for STMap
         
         Args:
@@ -755,21 +760,21 @@ class STMapExporter:
                 A = reference_tracks[A_idx]      # A in reference frame
                 B = reference_tracks[B_idx]      # B in reference frame
                 
-                # Step 2a: Project C' onto the LINE through A'B' → get D'
+                # Step 2a: Project C' onto the LINE through A'B' → get P'
                 AB_prime = B_prime - A_prime
                 AC_prime = pixel - A_prime
                 
                 # Calculate parameter t along the LINE through A'B' (not clamped to segment)
                 t = np.dot(AC_prime, AB_prime) / np.dot(AB_prime, AB_prime)
                 # No clamping - allow projections beyond segment endpoints
-                D_prime = A_prime + t * AB_prime
+                P_prime = A_prime + t * AB_prime
                 
-                # Step 2b: Find D on AB (corresponding point in reference frame)
-                D = A + t * (B - A)
+                # Step 2b: Find P on AB (corresponding point in reference frame)
+                P = A + t * (B - A)
                 
-                # Step 3: Find C along perpendicular line to AB going through D
+                # Step 3: Find C along perpendicular line to AB going through P
                 # Calculate perpendicular distance from C' to segment A'B'
-                DC_prime_length = np.linalg.norm(pixel - D_prime)
+                PC_prime_length = np.linalg.norm(pixel - P_prime)
                 
                 # Calculate perpendicular direction in reference frame
                 AB = B - A
@@ -780,26 +785,18 @@ class STMapExporter:
                     # Perpendicular vector (rotated 90 degrees)
                     perp_direction = np.array([AB[1], -AB[0]]) / AB_length
                     
-                    # Proportional distance: AB/A'B' * D'C'
+                    # Proportional distance: AB/A'B' * P'C'
                     scale_factor = AB_length / AB_prime_length
-                    DC_length = scale_factor * DC_prime_length
+                    PC_length = scale_factor * PC_prime_length
                     
                     # Determine which side of the segment (same side as in current frame)
                     cross_product = np.cross(AC_prime, AB_prime)
                     side_sign = 1 if cross_product >= 0 else -1
                     
-                    # Find C on perpendicular through D
-                    C = D + side_sign * DC_length * perp_direction
+                    # Find C on perpendicular through P
+                    C = P + side_sign * PC_length * perp_direction
                     result_coords[i] = C
                     
-                    # Debug: Log first few pixels to see what's happening
-                    if i < 5:  # Log first 5 pixels for more detail
-                        self.logger.debug(f"Pixel {i}: C'={pixel}")
-                        self.logger.debug(f"  A'={A_prime}, B'={B_prime}, A={A}, B={B}")
-                        self.logger.debug(f"  t={t:.4f}, D'={D_prime}, D={D}")
-                        self.logger.debug(f"  DC'={DC_prime_length:.4f}, DC={DC_length:.4f}, scale={scale_factor:.4f}")
-                        self.logger.debug(f"  C={C}, diff={pixel - C}")
-                        self.logger.debug(f"  ---")
                 else:
                     # Fallback: use nearest tracker position
                     result_coords[i] = A
@@ -813,28 +810,162 @@ class STMapExporter:
             closest_indices = np.argmin(distances, axis=0)
             return reference_tracks[closest_indices]
 
+    def _calculate_processing_bounds(self, mask: np.ndarray, reference_tracks: np.ndarray, padding_factor: float = 0.1) -> tuple:
+        """
+        Calculate smart bounding box for processing optimization.
+        
+        Args:
+            mask: Original mask array (H, W)
+            reference_tracks: Reference frame tracker positions (N, 2)
+            padding_factor: Safety padding as fraction of bbox size (default 0.1 = 10%)
+            
+        Returns:
+            Tuple of (min_x, min_y, max_x, max_y) for processing bounds
+        """
+        try:
+            height, width = mask.shape
+            
+            # 1. Get mask bounding box
+            mask_coords = np.where(mask > 0)
+            if len(mask_coords[0]) == 0:
+                # Empty mask - return full image bounds
+                return (0, 0, width-1, height-1)
+            
+            mask_min_y, mask_max_y = np.min(mask_coords[0]), np.max(mask_coords[0])
+            mask_min_x, mask_max_x = np.min(mask_coords[1]), np.max(mask_coords[1])
+            
+            # 2. Get tracker hull bounding box
+            if len(reference_tracks) < 3:
+                # Not enough trackers for hull - use tracker bounds
+                track_min_x, track_max_x = np.min(reference_tracks[:, 0]), np.max(reference_tracks[:, 0])
+                track_min_y, track_max_y = np.min(reference_tracks[:, 1]), np.max(reference_tracks[:, 1])
+            else:
+                # Calculate convex hull of trackers
+                from scipy.spatial import ConvexHull
+                try:
+                    hull = ConvexHull(reference_tracks)
+                    hull_points = reference_tracks[hull.vertices]
+                    track_min_x, track_max_x = np.min(hull_points[:, 0]), np.max(hull_points[:, 0])
+                    track_min_y, track_max_y = np.min(hull_points[:, 1]), np.max(hull_points[:, 1])
+                except:
+                    # Fallback to tracker bounds if hull fails
+                    track_min_x, track_max_x = np.min(reference_tracks[:, 0]), np.max(reference_tracks[:, 0])
+                    track_min_y, track_max_y = np.min(reference_tracks[:, 1]), np.max(reference_tracks[:, 1])
+            
+            # 3. Combine bounds (union of mask and tracker hull)
+            combined_min_x = min(mask_min_x, track_min_x)
+            combined_max_x = max(mask_max_x, track_max_x)
+            combined_min_y = min(mask_min_y, track_min_y)
+            combined_max_y = max(mask_max_y, track_max_y)
+            
+            # 4. Add safety padding
+            bbox_width = combined_max_x - combined_min_x
+            bbox_height = combined_max_y - combined_min_y
+            padding_x = max(1, int(bbox_width * padding_factor))
+            padding_y = max(1, int(bbox_height * padding_factor))
+            
+            # 5. Clamp to image bounds
+            min_x = max(0, int(combined_min_x - padding_x))
+            max_x = min(width-1, int(combined_max_x + padding_x))
+            min_y = max(0, int(combined_min_y - padding_y))
+            max_y = min(height-1, int(combined_max_y + padding_y))
+            
+            self.logger.debug(f"Processing bounds: ({min_x}, {min_y}) to ({max_x}, {max_y}) - area: {(max_x-min_x+1)*(max_y-min_y+1)} pixels")
+            
+            return (min_x, min_y, max_x, max_y)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to calculate processing bounds: {e}")
+            # Fallback to full image bounds
+            return (0, 0, width-1, height-1)
+
+    def _is_inside_delaunay_hull(self, pixels: np.ndarray, trackers: np.ndarray) -> np.ndarray:
+        """
+        Check which pixels are inside the Delaunay triangulation of trackers.
+        
+        Args:
+            pixels: Array of pixel coordinates (N, 2)
+            trackers: Array of tracker positions (M, 2)
+            
+        Returns:
+            Boolean array (N,) indicating which pixels are inside the hull
+        """
+        try:
+            from scipy.spatial import Delaunay
+            
+            if len(trackers) < 3:
+                # Not enough trackers for triangulation - use distance-based fallback
+                distances = np.linalg.norm(trackers[:, np.newaxis] - pixels, axis=2)
+                min_distances = np.min(distances, axis=0)
+                # Consider inside if within reasonable distance of nearest tracker
+                avg_tracker_distance = np.mean(np.linalg.norm(trackers[1:] - trackers[:-1], axis=1))
+                return min_distances < (avg_tracker_distance * 1.5)
+            
+            # Create Delaunay triangulation
+            tri = Delaunay(trackers)
+            
+            # Check which pixels are inside the triangulation
+            inside_mask = tri.find_simplex(pixels) >= 0
+            
+            return inside_mask
+            
+        except Exception as e:
+            self.logger.warning(f"Delaunay hull detection failed: {e}, using distance-based fallback")
+            # Fallback to distance-based method
+            distances = np.linalg.norm(trackers[:, np.newaxis] - pixels, axis=2)
+            min_distances = np.min(distances, axis=0)
+            if len(trackers) > 1:
+                avg_tracker_distance = np.mean(np.linalg.norm(trackers[1:] - trackers[:-1], axis=1))
+                return min_distances < (avg_tracker_distance * 1.5)
+            else:
+                return np.zeros(len(pixels), dtype=bool)
+
     def _warp_mask_with_segment_algorithm(self, mask: np.ndarray, reference_tracks: np.ndarray, current_tracks: np.ndarray) -> np.ndarray:
-        """Warp mask using the same segment-based algorithm as STMap coordinates."""
+        """Warp mask using the same hull detection and processing logic as STMap coordinates."""
         try:
             height, width = mask.shape
             warped_mask = np.zeros_like(mask)
             
-            # Create coordinate grids
-            y_coords, x_coords = np.mgrid[0:height, 0:width]
+            # Calculate smart processing bounds
+            min_x, min_y, max_x, max_y = self._calculate_processing_bounds(mask, reference_tracks)
+            
+            # Create coordinate grids only for the bounding box area
+            y_coords, x_coords = np.mgrid[min_y:max_y+1, min_x:max_x+1]
             points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
             
-            # Process ALL pixels to create a fully warped mask
-            self.logger.debug(f"Warping all {len(points)} pixels with segment-based algorithm")
+            # Process only pixels inside the bounding box
+            self.logger.debug(f"Warping {len(points)} pixels (bounding box) with hull-aware algorithm")
             
-            # Apply segment-based algorithm to ALL pixels
-            warped_coords = self._calculate_block_offset_coordinates(
-                points, reference_tracks, current_tracks
-            )
+            # Use same hull detection as STMap processing
+            inside_hull_mask = self._is_inside_delaunay_hull(points, current_tracks)
+            inside_hull_indices = np.where(inside_hull_mask)[0]
+            outside_hull_indices = np.where(~inside_hull_mask)[0]
+            
+            self.logger.debug(f"Mask warping: {len(outside_hull_indices)} pixels outside hull, {len(inside_hull_indices)} pixels inside hull")
+            
+            # Initialize result coordinates
+            warped_coords = np.zeros((len(points), 2), dtype=np.float32)
+            
+            # Process pixels inside hull with interpolation
+            if len(inside_hull_indices) > 0:
+                inside_pixels = points[inside_hull_indices]
+                interpolated_coords = self._interpolate_linear(current_tracks, reference_tracks, inside_pixels)
+                warped_coords[inside_hull_indices] = interpolated_coords
+            
+            # Process pixels outside hull with fringe algorithm
+            if len(outside_hull_indices) > 0:
+                outside_pixels = points[outside_hull_indices]
+                fringe_coords = self._calculate_fringe_coordinates(
+                    outside_pixels, reference_tracks, current_tracks
+                )
+                warped_coords[outside_hull_indices] = fringe_coords
             
             # For each pixel in current frame, sample from reference frame mask
             for i, (current_idx, reference_coord) in enumerate(zip(range(len(points)), warped_coords)):
-                # Get current pixel position (where we're writing to)
-                current_y, current_x = divmod(current_idx, width)
+                # Get current pixel position (where we're writing to) - adjust for bounding box offset
+                current_y, current_x = divmod(current_idx, max_x - min_x + 1)
+                current_y += min_y
+                current_x += min_x
                 
                 # Get reference coordinates (where to sample from in the reference mask)
                 x, y = reference_coord

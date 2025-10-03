@@ -210,14 +210,6 @@ class GradioInterface:
         output_dir.mkdir(exist_ok=True)
         return f"outputs/CoTracker_{timestamp}_stmap/CoTracker_{timestamp}_stmap.%04d.exr"
     
-    def get_default_enhanced_stmap_output_path(self) -> str:
-        """Get default Enhanced STMap output file path."""
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Create outputs directory if it doesn't exist
-        output_dir = Path("outputs")
-        output_dir.mkdir(exist_ok=True)
-        return f"outputs/CoTracker_{timestamp}_enhanced_stmap/CoTracker_{timestamp}_enhanced_stmap.%04d.exr"
     
     def browse_output_folder(self) -> str:
         """Open file dialog to browse for output location."""
@@ -961,6 +953,17 @@ class GradioInterface:
         else:
             return f"⚠️ Could not copy to clipboard.\nPath: {self.last_stmap_path}"
     
+    def copy_enhanced_stmap_directory_path(self) -> str:
+        """Copy the last exported Enhanced STMap directory path to clipboard."""
+        if self.last_enhanced_stmap_path is None:
+            return "❌ No Enhanced STMap sequence has been exported yet. Please export Enhanced STMap first."
+        
+        success = self.copy_to_clipboard(self.last_enhanced_stmap_path)
+        if success:
+            return f"📋 Copied to clipboard!\n{self.last_enhanced_stmap_path}"
+        else:
+            return f"⚠️ Could not copy to clipboard.\nPath: {self.last_enhanced_stmap_path}"
+    
     def create_interface(self) -> gr.Blocks:
         """Create and return the Gradio interface."""
         with gr.Blocks(
@@ -1142,11 +1145,12 @@ class GradioInterface:
                 lines=2
             )
             
-            # === STEP 7: EXPORT STMAP SEQUENCE ===
+            
+            # === STMAP EXPORT ===
             gr.Markdown("## 🗺️ Step 7: Export STMap Sequence")
             gr.Markdown("""
             Generate an animated STMap sequence for geometric transformations in Nuke.
-            STMap uses UV coordinates where pixel values represent source positions for warping.
+            Combines STMap coordinates with animated mask in a single RGBA EXR sequence.
             """)
             
             with gr.Row():
@@ -1183,56 +1187,9 @@ class GradioInterface:
                         )
             
             with gr.Row():
-                stmap_output_file_path = gr.Textbox(
+                enhanced_stmap_output_file_path = gr.Textbox(
                     label="📁 STMap Output File Path",
                     value=self.get_default_stmap_output_path(),
-                    info="Path pattern for EXR sequence (use %04d for frame numbers)",
-                    scale=3
-                )
-                
-                stmap_file_picker_btn = gr.Button(
-                    "📂 Browse",
-                    size="sm",
-                    scale=1
-                )
-            
-            stmap_export_btn = gr.Button(
-                "🗺️ Generate STMap Sequence",
-                variant="primary",
-                size="lg"
-            )
-            
-            stmap_progress = gr.Progress()
-            
-            stmap_export_status = gr.Textbox(
-                label="📋 STMap Export Status",
-                interactive=False,
-                lines=4
-            )
-            
-            stmap_copy_path_btn = gr.Button(
-                "📋 Copy STMap Directory Path",
-                variant="primary",
-                size="lg"
-            )
-            
-            stmap_copy_status = gr.Textbox(
-                label="📋 STMap Copy Status",
-                interactive=False,
-                lines=2
-            )
-            
-            # === ENHANCED STMAP EXPORT ===
-            gr.Markdown("## 🚀 Enhanced STMap Export (Mask-Aware)")
-            gr.Markdown("""
-            Generate mask-aware STMap with intelligent interpolation and RGBA output.
-            Combines STMap coordinates with animated mask in a single EXR sequence.
-            """)
-            
-            with gr.Row():
-                enhanced_stmap_output_file_path = gr.Textbox(
-                    label="📁 Enhanced STMap Output File Path",
-                    value=self.get_default_enhanced_stmap_output_path(),
                     info="Path pattern for RGBA EXR sequence (use %04d for frame numbers)",
                     scale=3
                 )
@@ -1244,15 +1201,27 @@ class GradioInterface:
                 )
             
             enhanced_stmap_export_btn = gr.Button(
-                "🚀 Generate Enhanced STMap Sequence",
+                "🗺️ Generate STMap Sequence",
                 variant="primary",
                 size="lg"
             )
             
             enhanced_stmap_export_status = gr.Textbox(
-                label="📋 Enhanced STMap Export Status",
+                label="📋 STMap Export Status",
                 interactive=False,
                 lines=4
+            )
+            
+            enhanced_stmap_copy_path_btn = gr.Button(
+                "📋 Copy STMap Directory Path",
+                variant="primary",
+                size="lg"
+            )
+            
+            enhanced_stmap_copy_status = gr.Textbox(
+                label="📋 STMap Copy Status",
+                interactive=False,
+                lines=2
             )
             
             # === ANIMATED MASK EXPORT ===
@@ -1357,12 +1326,6 @@ class GradioInterface:
                 outputs=[copy_status]
             )
             
-            # STMap export event handlers
-            stmap_file_picker_btn.click(
-                fn=lambda: gr.update(value=self.browse_stmap_output_folder()),
-                outputs=[stmap_output_file_path]
-            )
-            
             # Update STMap frame defaults when video loads
             reference_video.change(
                 fn=self.update_stmap_frame_defaults,
@@ -1377,17 +1340,6 @@ class GradioInterface:
                 outputs=[stmap_frame_start, stmap_frame_end]
             )
             
-            stmap_export_btn.click(
-                fn=self.export_stmap_sequence,
-                inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame, stmap_output_file_path],
-                outputs=[stmap_export_status]
-            )
-            
-            stmap_copy_path_btn.click(
-                fn=self.copy_stmap_path,
-                outputs=[stmap_copy_status]
-            )
-            
             enhanced_stmap_export_btn.click(
                 fn=self.export_enhanced_stmap_sequence,
                 inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame, enhanced_stmap_output_file_path],
@@ -1397,6 +1349,11 @@ class GradioInterface:
             enhanced_stmap_file_picker_btn.click(
                 fn=self.browse_enhanced_stmap_output_folder,
                 outputs=[enhanced_stmap_output_file_path]
+            )
+            
+            enhanced_stmap_copy_path_btn.click(
+                fn=self.copy_enhanced_stmap_directory_path,
+                outputs=[enhanced_stmap_copy_status]
             )
             
             animated_mask_export_btn.click(

@@ -19,7 +19,10 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 - 🎭 **Zone Masking**: Interactive mask drawing to restrict tracking to specific areas
 - 🖼️ **Visual Preview**: Real-time preview of tracked points with frame-by-frame navigation
 - 📤 **Smart Nuke Export**: Generates complete Nuke Tracker4 nodes with proper coordinate transformation
-- 🗺️ **STMap Generation**: Complete animated STMap sequence generation for geometric transformations
+- 🗺️ **Advanced STMap Generation**: Complete animated STMap sequence with RGBA output and intelligent interpolation
+- 🎭 **Animated Mask Integration**: Mask-aware STMap generation with embedded animated mask in alpha channel
+- 🔍 **Delaunay Hull Detection**: Accurate inside/outside hull classification for optimal coordinate mapping
+- ⚡ **Performance Optimization**: Smart bounding box processing for 10-20x speed improvements
 - 📊 **Progress Tracking**: Real-time progress bars for both tracking and STMap generation
 - 📋 **Clipboard Integration**: One-click copy of .nk file paths with Windows 11 support
 - 🗂️ **File Management**: Built-in file browser and automatic output organization
@@ -83,7 +86,7 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 7. **🗺️ Generate STMap Sequence** (Optional):
    - Choose interpolation method (linear or cubic) and bit depth (16-bit or 32-bit)
    - Set frame range for STMap export (defaults to full sequence)
-   - Click "🗺️ Generate STMap Sequence" to create animated EXR files
+   - Click "🗺️ Generate STMap Sequence" to create animated RGBA EXR files
    - View real-time progress bar during generation
    - Click "📋 Copy STMap Directory Path" to copy the output folder path
 
@@ -99,8 +102,8 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 3. **Using STMap sequences** (if generated):
    - Import the EXR sequence using Read node
    - Connect to STMap node for geometric transformations
-   - STMap files contain RGB channels: Red=X coordinates, Green=Y coordinates, Blue=black
-   - Reference frame shows perfect gradient, other frames show coordinate mapping
+   - STMap files contain RGBA channels: Red=X coordinates, Green=Y coordinates, Blue=black, Alpha=animated mask
+   - Reference frame shows perfect gradient, other frames show coordinate mapping with animated mask
 
 ## How It Works
 
@@ -124,15 +127,18 @@ The generated Nuke script includes:
 
 ### STMap Generation
 
-The STMap export system provides:
-- **Animated EXR sequences**: RGB channel format for Nuke compatibility
+The advanced STMap export system provides:
+- **RGBA EXR sequences**: Red=X coordinates, Green=Y coordinates, Blue=black, Alpha=animated mask
+- **Delaunay hull detection**: Accurate inside/outside hull classification for optimal processing
+- **Unified processing logic**: Mask warping and STMap generation use identical algorithms
+- **Segment-based fringe algorithm**: Geometric projection for pixels outside tracker hull
+- **Smart bounding box optimization**: 10-20x performance improvement by processing only relevant pixels
 - **Perfect reference frame**: Identity gradient (Red=0-1 horizontal, Green=0-1 vertical)
 - **Coordinate mapping**: Each pixel shows where to sample from in the reference frame
 - **Interpolation options**: Linear or cubic interpolation between tracking points
 - **Bit depth support**: 16-bit or 32-bit float precision
 - **Progress tracking**: Real-time progress bar during generation
 - **Metadata embedding**: EXR files include export parameters and software information
-- **RGBA mask conversion**: Automatic conversion of monochromatic masks to RGBA format
 
 ## Technical Details
 

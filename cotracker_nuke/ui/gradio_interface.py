@@ -944,9 +944,69 @@ class GradioInterface:
             reference_frame = self.app.reference_frame + image_sequence_start_frame
             output_file_path = self.process_path_variables(output_file_path, reference_frame)
             
-            # Create progress callback function
-            def progress_callback(current_frame, total_frames):
-                progress(current_frame / total_frames, desc=f"Processing frame {current_frame}/{total_frames}")
+            # Create progress callback function with ETA
+            import time
+            start_time = time.time()
+            
+            # Use a mutable container to track analysis phase and store first frame stats
+            analysis_state = {
+                "phase": True, 
+                "first_frame_time": None,
+                "first_frame_memory": None,
+                "estimated_total_time": None
+            }
+            
+            def progress_callback(current_frame, total_frames, performance_data=None):
+                # Calculate ETA
+                elapsed_time = time.time() - start_time
+                
+                if current_frame == 1 and analysis_state["phase"]:
+                    # First frame completed - show analysis results with stats
+                    analysis_state["phase"] = False
+                    
+                    if performance_data:
+                        # Use actual performance data from STMap exporter
+                        first_frame_time = performance_data['first_frame_time']
+                        first_frame_memory = performance_data['first_frame_memory']
+                        estimated_total_time = performance_data['estimated_total_time']
+                        
+                        # Convert to minutes:seconds format
+                        eta_minutes = int(estimated_total_time // 60)
+                        eta_secs = int(estimated_total_time % 60)
+                        eta_str = f"{eta_minutes:02d}:{eta_secs:02d}"
+                        
+                        desc = f"✅ First frame: {first_frame_time:.1f}s, {first_frame_memory:.1f}MB | Est. total: {eta_str} | Frame 1/{total_frames} | Starting parallel processing"
+                    else:
+                        # Fallback to elapsed time
+                        analysis_state["first_frame_time"] = elapsed_time
+                        estimated_total_time = elapsed_time * total_frames * 2.5
+                        analysis_state["estimated_total_time"] = estimated_total_time
+                        
+                        eta_minutes = int(estimated_total_time // 60)
+                        eta_secs = int(estimated_total_time % 60)
+                        eta_str = f"{eta_minutes:02d}:{eta_secs:02d}"
+                        
+                        desc = f"✅ First frame: {elapsed_time:.1f}s | Est. total: {eta_str} | Frame 1/{total_frames} | Starting parallel processing"
+                elif current_frame > 1:
+                    # Regular processing with ETA
+                    avg_time_per_frame = elapsed_time / current_frame
+                    remaining_frames = total_frames - current_frame
+                    eta_seconds = remaining_frames * avg_time_per_frame
+                    
+                    # Convert to minutes:seconds format
+                    eta_minutes = int(eta_seconds // 60)
+                    eta_secs = int(eta_seconds % 60)
+                    eta_str = f"{eta_minutes:02d}:{eta_secs:02d}"
+                    
+                    desc = f"Processing frame {current_frame}/{total_frames} | ETA: {eta_str}"
+                else:
+                    # Initial state (shouldn't happen with current callback sequence)
+                    desc = f"🔍 Analyzing first frame performance to estimate processing time..."
+                
+                progress(current_frame / total_frames, desc=desc)
+
+            # Show initial message
+            progress(0, desc="🔍 Analyzing first frame performance to estimate processing time...")
 
             # Generate STMap sequence
             output_dir = stmap_exporter.generate_stmap_sequence(

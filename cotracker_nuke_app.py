@@ -40,20 +40,20 @@ def main():
         epilog="""
 This is the new modular version with improved architecture:
 
-🏗️  Modular Structure:
+Modular Structure:
   - core/: Core tracking and video processing logic
   - exporters/: Nuke export functionality  
   - ui/: Gradio web interface
   - cli/: Command-line interface
   - utils/: Logging and utility functions
 
-📊 Logging Levels:
+Logging Levels:
   - DEBUG: Detailed debugging information
   - INFO: General information (default)
   - WARNING: Warning messages only
   - ERROR: Error messages only
 
-🚀 Usage:
+Usage:
   python cotracker_nuke_app_new.py --log-level DEBUG
         """
     )

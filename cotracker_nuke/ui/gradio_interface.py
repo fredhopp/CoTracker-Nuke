@@ -14,6 +14,8 @@ import logging
 import os
 from pathlib import Path
 from datetime import datetime
+import time
+import threading
 
 from ..core.app import CoTrackerNukeApp
 from ..exporters.stmap_exporter import STMapExporter
@@ -587,8 +589,7 @@ class GradioInterface:
         else:
             return f"⚠️ Could not copy to clipboard.\nPath: {self.last_exported_path}"
     
-    # OLD METHOD REMOVED - Only enhanced STMap export is used now
-    def _removed_export_stmap_sequence(self, 
+    def export_stmap_sequence(self, 
                             interpolation_method: str,
                             bit_depth: int,
                             frame_start: int,
@@ -708,7 +709,7 @@ class GradioInterface:
             # Get reference frame info
             reference_frame_display = self.app.reference_frame + image_sequence_start_frame
             
-            status_msg = (f"✅ STMap sequence generated!\n"
+            status_msg = (f"✅ STMap sequence generated in XXminXXsec\n"
                          f"📁 Directory: {absolute_output_dir}\n"
                          f"🎯 Points: {info['num_points']}\n"
                          f"📹 Frames: {len(exr_files)} EXR files\n"
@@ -950,77 +951,52 @@ class GradioInterface:
             
             # Use a mutable container to track analysis phase and store first frame stats
             analysis_state = {
-                "phase": True, 
+                "phase": True,
                 "first_frame_time": None,
                 "first_frame_memory": None,
-                "estimated_total_time": None
+                "estimated_total_time": None,
+                "estimated_parallel_rate": None,
+                "parallel_start_time": None,
+                "frames_completed": 0
             }
             
-            def progress_callback(current_frame, total_frames, performance_data=None):
-                # Calculate ETA
-                elapsed_time = time.time() - start_time
-                
-                if current_frame == 1 and analysis_state["phase"]:
-                    # First frame completed - show analysis results with stats
-                    analysis_state["phase"] = False
-                    
-                    if performance_data:
-                        # Use actual performance data from STMap exporter
-                        first_frame_time = performance_data['first_frame_time']
-                        first_frame_memory = performance_data['first_frame_memory']
-                        estimated_total_time = performance_data['estimated_total_time']
-                        
-                        # Convert to minutes:seconds format
-                        eta_minutes = int(estimated_total_time // 60)
-                        eta_secs = int(estimated_total_time % 60)
-                        eta_str = f"{eta_minutes:02d}:{eta_secs:02d}"
-                        
-                        desc = f"✅ First frame: {first_frame_time:.1f}s, {first_frame_memory:.1f}MB | Est. total: {eta_str} | Frame 1/{total_frames} | Starting parallel processing"
-                    else:
-                        # Fallback to elapsed time
-                        analysis_state["first_frame_time"] = elapsed_time
-                        estimated_total_time = elapsed_time * total_frames * 2.5
-                        analysis_state["estimated_total_time"] = estimated_total_time
-                        
-                        eta_minutes = int(estimated_total_time // 60)
-                        eta_secs = int(estimated_total_time % 60)
-                        eta_str = f"{eta_minutes:02d}:{eta_secs:02d}"
-                        
-                        desc = f"✅ First frame: {elapsed_time:.1f}s | Est. total: {eta_str} | Frame 1/{total_frames} | Starting parallel processing"
-                elif current_frame > 1:
-                    # Regular processing with ETA
-                    avg_time_per_frame = elapsed_time / current_frame
-                    remaining_frames = total_frames - current_frame
-                    eta_seconds = remaining_frames * avg_time_per_frame
-                    
-                    # Convert to minutes:seconds format
-                    eta_minutes = int(eta_seconds // 60)
-                    eta_secs = int(eta_seconds % 60)
-                    eta_str = f"{eta_minutes:02d}:{eta_secs:02d}"
-                    
-                    desc = f"Processing frame {current_frame}/{total_frames} | ETA: {eta_str}"
+            # Store timing information for final message
+            processing_time_seconds = None
+            
+            def progress_callback_simple(current_frame, total_frames, message=None):
+                nonlocal processing_time_seconds
+                # Simple progress callback - update UI with the message
+                if message:
+                    self.logger.info(f"📊 Progress: {message}")
+                    # Check if this is the final completion message with timing
+                    if "STMap sequence generated in" in message and "seconds" in message:
+                        # Extract timing from message like "✅ STMap sequence generated in 67.3 seconds."
+                        import re
+                        time_match = re.search(r'(\d+\.?\d*)\s*seconds', message)
+                        if time_match:
+                            processing_time_seconds = float(time_match.group(1))
+                    # Update the progress bar with the message (no percentage display)
+                    progress(0, desc=message)
                 else:
-                    # Initial state (shouldn't happen with current callback sequence)
-                    desc = f"🔍 Analyzing first frame performance to estimate processing time..."
-                
-                progress(current_frame / total_frames, desc=desc)
+                    self.logger.info(f"📊 Progress: {current_frame}/{total_frames}")
+                    progress(0)
 
-            # Show initial message
-            progress(0, desc="🔍 Analyzing first frame performance to estimate processing time...")
-
-            # Generate STMap sequence
-            output_dir = stmap_exporter.generate_stmap_sequence(
-                tracks=tracks,
-                visibility=visibility,
-                mask=mask,
-                interpolation_method=interpolation_method,
-                bit_depth=bit_depth,
-                frame_start=frame_start,
-                frame_end=frame_end,
-                frame_offset=image_sequence_start_frame,
-                output_file_path=output_file_path,
-                progress_callback=progress_callback
-            )
+            # Start STMap generation (progress handled by callback)
+            try:
+                output_dir = stmap_exporter.generate_stmap_sequence(
+                    tracks=tracks,
+                    visibility=visibility,
+                    mask=mask,
+                    interpolation_method=interpolation_method,
+                    bit_depth=bit_depth,
+                    frame_start=frame_start,
+                    frame_end=frame_end,
+                    frame_offset=image_sequence_start_frame,
+                    output_file_path=output_file_path,
+                    progress_callback=progress_callback_simple
+                )
+            except Exception as e:
+                raise e
             
             # Store the exported path
             self.last_stmap_path = str(Path(output_dir).resolve())
@@ -1029,12 +1005,20 @@ class GradioInterface:
             output_path = Path(output_dir)
             exr_files = list(output_path.glob("*.exr"))
             
-            return (f"✅ STMap sequence generated!\n"
+            # Format timing for display
+            if processing_time_seconds is not None:
+                minutes = int(processing_time_seconds // 60)
+                seconds = int(processing_time_seconds % 60)
+                timing_display = f"{minutes:02d}min {seconds:02d}sec"
+            else:
+                timing_display = "XXmin XXsec"  # Fallback if timing not captured
+            
+            return (f"✅ STMap sequence generated in {timing_display}\n"
                    f"📁 Directory: {self.last_stmap_path}\n"
                    f"📹 Frames: {len(exr_files)} RGBA EXR files\n"
                    f"🎬 Reference frame: {self.app.reference_frame + image_sequence_start_frame}\n"
-                   f"🎯 Features: Mask-aware interpolation, RGBA output, intelligent coordinate mapping")
-                   
+                   f"🎯 Features: Mask-aware interpolation, RGBA output")
+        
         except Exception as e:
             error_msg = f"❌ STMap export failed: {str(e)}"
             self.logger.error(error_msg)

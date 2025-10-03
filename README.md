@@ -23,14 +23,15 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 - 🎭 **Animated Mask Integration**: Mask-aware STMap generation with embedded animated mask in alpha channel
 - 🔍 **Delaunay Hull Detection**: Accurate inside/outside hull classification for optimal coordinate mapping
 - ⚡ **Performance Optimization**: Smart bounding box processing for 10-20x speed improvements
-- 📊 **Progress Tracking**: Real-time progress bars for both tracking and STMap generation
+- 📊 **Real-Time Progress Tracking**: 3-stage progress system with actual timing display for STMap generation
 - 📋 **Clipboard Integration**: One-click copy of .nk file paths with Windows 11 support
 - 🗂️ **File Management**: Built-in file browser and automatic output organization with absolute paths
 - 🏗️ **Modular Architecture**: Clean, maintainable codebase with separated concerns
 - 🎨 **Clean UI Design**: Organized interface with grouped browse buttons and dynamic path variables
 - 🔧 **Dynamic Path Variables**: Support for %refFrame% in output paths for organized file management
-- 📝 **Enhanced Metadata**: EXR files include comprehensive metadata for traceability
 - 🧹 **Project Cleanup**: Clean project structure with removed test/debug files
+- ⚡ **ProcessPoolExecutor**: True CPU parallelism for STMap generation with optimal resource utilization
+- 🛡️ **Robust Error Handling**: Division by zero protection and comprehensive error recovery
 
 ## Installation
 
@@ -92,7 +93,7 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
    - Set frame range for STMap export (defaults to full sequence)
    - Use dynamic path variables like %refFrame% for organized output
    - Click "🗺️ Generate STMap Sequence" to create animated RGBA EXR files
-   - View real-time progress bar during generation
+   - View 3-stage progress system: analyzing → ETA estimation → completion with actual timing
    - Click "📋 Copy STMap Directory Path" to copy the output folder path
 
 ### Importing into Nuke
@@ -142,8 +143,9 @@ The advanced STMap export system provides:
 - **Coordinate mapping**: Each pixel shows where to sample from in the reference frame
 - **Interpolation options**: Linear or cubic interpolation between tracking points
 - **Bit depth support**: 16-bit or 32-bit float precision
-- **Progress tracking**: Real-time progress bar during generation
-- **Metadata embedding**: EXR files include export parameters and software information
+- **Real-time progress tracking**: 3-stage progress system with actual timing display
+- **ProcessPoolExecutor**: True CPU parallelism for optimal performance
+- **Robust error handling**: Division by zero protection and comprehensive error recovery
 
 ## Technical Details
 

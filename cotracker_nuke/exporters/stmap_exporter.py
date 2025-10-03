@@ -73,13 +73,8 @@ def _process_frame_standalone(frame_data: dict) -> Tuple[int, str]:
             filename = f"CoTracker_{timestamp}_stmap.{actual_frame_number:04d}.exr"
         frame_path = output_dir / filename
         
-        # Create metadata
-        frame_metadata = {
-            'referenceFrame': str(reference_frame + frame_offset)
-        }
-        
-        # Save EXR file
-        exporter._save_exr(stmap, frame_path, 32, frame_metadata)
+        # Save EXR file (no metadata needed)
+        exporter._save_exr(stmap, frame_path, 32, None)
         
         return frame_idx, str(frame_path)
         
@@ -186,7 +181,7 @@ class STMapExporter:
             'memory_limited_workers': memory_limited_workers,
             'cpu_limited_workers': cpu_limited_workers,
             'estimated_total_memory_gb': memory_per_frame_gb * optimal_workers,
-            'estimated_processing_time': single_frame_analysis['processing_time'] * total_frames / optimal_workers
+            'estimated_processing_time': single_frame_analysis['processing_time'] * total_frames / optimal_workers if optimal_workers > 0 else single_frame_analysis['processing_time'] * total_frames
         }
     
     def _process_frame_parallel(self, 
@@ -233,13 +228,8 @@ class STMapExporter:
             if frame_idx <= 2:
                 self.logger.debug(f"💾 Thread {thread_id}: Saving frame {frame_idx} as {filename} (display frame {actual_frame_number})")
             
-            # Create metadata
-            frame_metadata = {
-                'referenceFrame': str(reference_frame + frame_offset)
-            }
-            
-            # Save EXR file
-            self._save_exr(stmap, frame_path, 32, frame_metadata)
+            # Save EXR file (no metadata needed)
+            self._save_exr(stmap, frame_path, 32, None)
             
             # Debug logging for first few frames with thread ID
             if frame_idx <= 2:
@@ -349,12 +339,8 @@ class STMapExporter:
             frame_filename = filename_pattern % actual_frame_number
             frame_path = output_dir / frame_filename
             
-            # Create simple metadata with just referenceFrame for now
-            frame_metadata = {
-                'referenceFrame': str(self.reference_frame + frame_offset)
-            }
-            
-            self._save_exr(stmap, frame_path, bit_depth, frame_metadata)
+            # Save EXR file (no metadata needed)
+            self._save_exr(stmap, frame_path, bit_depth, None)
             
             # Update progress
             processed_frames += 1
@@ -452,6 +438,10 @@ class STMapExporter:
             total_frames = end_idx - start_idx + 1
             processed_frames = 0
             
+            # Stage 1: Show analyzing first frame message
+            if progress_callback:
+                progress_callback(0, total_frames, "🔍 Analyzing first frame performance to estimate processing time...")
+            
             # Get system resources for parallel processing optimization
             self.logger.info("Analyzing system resources for parallel processing...")
             system_resources = self._get_system_resources()
@@ -486,11 +476,8 @@ class STMapExporter:
                 first_filename = f"CoTracker_{timestamp}_stmap.{first_frame_number:04d}.exr"
             first_frame_path = output_dir / first_filename
             
-            first_frame_metadata = {
-                'referenceFrame': str(self.reference_frame + frame_offset)
-            }
-            
-            self._save_exr(first_frame_stmap, first_frame_path, bit_depth, first_frame_metadata)
+            # Save EXR file (no metadata needed)
+            self._save_exr(first_frame_stmap, first_frame_path, bit_depth, None)
             self.logger.info(f"💾 First frame written to disk: {first_frame_path}")
             self.logger.info(f"✅ Saved first frame {first_frame_number} during performance analysis: {first_frame_path}")
             processed_frames += 1
@@ -516,22 +503,25 @@ class STMapExporter:
             
             # For ProcessPoolExecutor, assume better parallelization for CPU-bound computation
             # STMap generation is CPU-intensive, EXR writing is I/O bound
-            # Assume 60% efficiency for CPU-bound tasks with ProcessPoolExecutor
-            cpu_efficiency = 0.6  # 60% efficiency (realistic for CPU-bound tasks)
-            realistic_estimate = single_frame_time * remaining_frames / (optimal_workers * cpu_efficiency)
+            # Based on actual performance data: 2.8 fps with 51 workers = ~32% efficiency
+            cpu_efficiency = 0.3  # 30% efficiency (realistic based on actual performance)
+            parallel_processing_time = single_frame_time * remaining_frames / (optimal_workers * cpu_efficiency)
+            
+            # Total estimate includes first frame time + parallel processing time
+            realistic_estimate = single_frame_time + parallel_processing_time
             realistic_minutes = int(realistic_estimate // 60)
             realistic_seconds = int(realistic_estimate % 60)
             self.logger.info(f"📊 Realistic processing estimate: {realistic_minutes:02d}:{realistic_seconds:02d} (includes parallel overhead)")
             
-            # Update progress callback with initial estimate and performance data
+            # Show initial estimate after first frame analysis
             if progress_callback:
-                # Pass performance analysis data to the callback
-                performance_data = {
-                    'first_frame_time': single_frame_analysis['processing_time'],
-                    'first_frame_memory': single_frame_analysis['memory_used_mb'],
-                    'estimated_total_time': realistic_estimate
-                }
-                progress_callback(1, total_frames, performance_data)  # First frame completed
+                # Convert to minutes:seconds format
+                eta_minutes = int(realistic_estimate // 60)
+                eta_secs = int(realistic_estimate % 60)
+                eta_str = f"{eta_minutes:02d}:{eta_secs:02d}"
+                
+                # Stage 2: Show estimate after first frame analysis
+                progress_callback(0, total_frames, f"🚀 Starting STMap generation... Estimated time: {eta_str}")
             
             # Prepare frame data for parallel processing (skip first frame - already processed)
             frame_data_list = []
@@ -581,6 +571,7 @@ class STMapExporter:
             completed_processes = set()
             
             # Process completed frames as they finish (true parallel processing)
+            
             for future in as_completed(future_to_frame):
                 try:
                     frame_idx, output_path = future.result()
@@ -599,9 +590,8 @@ class STMapExporter:
                         current_frame_number = frame_idx + frame_offset
                         self.logger.info(f"✅ Process completed frame {processed_frames}/{total_frames} (0-based: {frame_idx}, display: {current_frame_number}) -> {output_path}")
                     
-                    # Update progress callback
-                    if progress_callback:
-                        progress_callback(processed_frames, total_frames)
+                    # Log progress (no UI updates during processing)
+                    self.logger.info(f"📊 Progress: {processed_frames}/{total_frames} frames completed")
                     
                     if processed_frames % 10 == 0:  # Log every 10 frames
                         current_frame_number = frame_idx + frame_offset
@@ -621,6 +611,11 @@ class STMapExporter:
             # Count generated files
             exr_files = list(output_dir.glob("*.exr"))
             self.logger.info(f"STMap sequence generated: {output_dir} with {len(exr_files)} files")
+            
+            # Show final completion message
+            if progress_callback:
+                progress_callback(total_frames, total_frames, f"✅ STMap sequence generated in {total_processing_time:.1f} seconds.")
+            
             return str(output_dir)
             
         except Exception as e:
@@ -838,8 +833,10 @@ class STMapExporter:
         
         if not is_normalized:
             # Normalize coordinates to 0-1 range
-            stmap[:, :, 0] = stmap[:, :, 0] / width   # X coordinate (S)
-            stmap[:, :, 1] = stmap[:, :, 1] / height  # Y coordinate (T)
+            if width > 0:
+                stmap[:, :, 0] = stmap[:, :, 0] / width   # X coordinate (S)
+            if height > 0:
+                stmap[:, :, 1] = stmap[:, :, 1] / height  # Y coordinate (T)
         
         # Convert Y coordinate from top-left to bottom-left origin
         stmap[:, :, 1] = 1.0 - stmap[:, :, 1]
@@ -1091,12 +1088,21 @@ class STMapExporter:
                 AC_prime = pixel - A_prime
                 
                 # Calculate parameter t along the LINE through A'B' (not clamped to segment)
-                t = np.dot(AC_prime, AB_prime) / np.dot(AB_prime, AB_prime)
-                # No clamping - allow projections beyond segment endpoints
-                P_prime = A_prime + t * AB_prime
+                AB_prime_dot = np.dot(AB_prime, AB_prime)
+                if AB_prime_dot > 0:
+                    t = np.dot(AC_prime, AB_prime) / AB_prime_dot
+                    # No clamping - allow projections beyond segment endpoints
+                    P_prime = A_prime + t * AB_prime
+                else:
+                    # If AB_prime is zero vector, use A_prime as projection point
+                    P_prime = A_prime
                 
                 # Step 2b: Find P on AB (corresponding point in reference frame)
-                P = A + t * (B - A)
+                if AB_prime_dot > 0:
+                    P = A + t * (B - A)
+                else:
+                    # If AB_prime is zero vector, use A as reference point
+                    P = A
                 
                 # Step 3: Find C along perpendicular line to AB going through P
                 # Calculate perpendicular distance from C' to segment A'B'

@@ -390,8 +390,8 @@ class STMapExporter:
                            f"{system_resources['available_memory_gb']:.1f}GB available memory, "
                            f"{system_resources['memory_percent']:.1f}% memory used")
             
-            # Analyze single frame performance for optimization
-            self.logger.info("Analyzing single frame performance...")
+            # Analyze single frame performance for optimization and save the first frame
+            self.logger.info("Analyzing single frame performance and processing first frame...")
             test_frame_idx = start_idx
             current_tracks = tracks_np[test_frame_idx]
             current_visibility = visibility_np[test_frame_idx]
@@ -402,6 +402,28 @@ class STMapExporter:
             single_frame_analysis = self._analyze_single_frame_performance(
                 mask, visible_reference_tracks, visible_current_tracks, valid_trackers, interpolation_method
             )
+            
+            # Save the first frame that was already processed during performance analysis
+            first_frame_stmap = self._generate_frame_stmap(
+                mask, visible_reference_tracks, visible_current_tracks, valid_trackers, interpolation_method
+            )
+            
+            # Save first frame EXR
+            first_frame_number = test_frame_idx + frame_offset
+            if output_file_path and "%04d" in output_file_path:
+                first_filename = Path(output_file_path).name % first_frame_number
+            else:
+                first_filename = f"CoTracker_{timestamp}_stmap.{first_frame_number:04d}.exr"
+            first_frame_path = output_dir / first_filename
+            
+            first_frame_metadata = {
+                'referenceFrame': str(self.reference_frame + frame_offset)
+            }
+            
+            self._save_exr(first_frame_stmap, first_frame_path, bit_depth, first_frame_metadata)
+            self.logger.info(f"💾 First frame written to disk: {first_frame_path}")
+            self.logger.info(f"✅ Saved first frame {first_frame_number} during performance analysis: {first_frame_path}")
+            processed_frames += 1
             
             # Calculate optimal parallelization
             parallelization_info = self._calculate_optimal_parallelization(
@@ -416,9 +438,9 @@ class STMapExporter:
             self.logger.info(f"Estimated total memory usage: {parallelization_info['estimated_total_memory_gb']:.1f}GB")
             self.logger.info(f"Estimated processing time: {parallelization_info['estimated_processing_time']:.1f}s")
             
-            # Prepare frame data for parallel processing
+            # Prepare frame data for parallel processing (skip first frame - already processed)
             frame_data_list = []
-            for frame_idx in range(start_idx, end_idx + 1):
+            for frame_idx in range(start_idx + 1, end_idx + 1):  # Skip first frame (start_idx + 1)
                 current_tracks = tracks_np[frame_idx]
                 current_visibility = visibility_np[frame_idx]
                 visible_current_tracks = current_tracks[visible_mask]
@@ -440,9 +462,11 @@ class STMapExporter:
                 }
                 frame_data_list.append(frame_data)
             
+            self.logger.info(f"Skipping first frame (already processed), processing remaining {len(frame_data_list)} frames in parallel")
+            
             # Process frames in parallel
-            self.logger.info(f"Processing {total_frames} frames with {parallelization_info['optimal_workers']} parallel workers...")
-            self.logger.info(f"Frame range: {start_idx} to {end_idx} (0-based), frame offset: {frame_offset}")
+            self.logger.info(f"Processing {len(frame_data_list)} remaining frames with {parallelization_info['optimal_workers']} parallel workers...")
+            self.logger.info(f"Frame range: {start_idx + 1} to {end_idx} (0-based), frame offset: {frame_offset}")
             start_time = time.time()
             
             with ThreadPoolExecutor(max_workers=parallelization_info['optimal_workers']) as executor:

@@ -6,6 +6,9 @@ Main CoTracker Nuke Application
 Orchestrates all components for the CoTracker-Nuke integration.
 """
 
+import os
+import multiprocessing as mp
+
 import torch
 import numpy as np
 import cv2

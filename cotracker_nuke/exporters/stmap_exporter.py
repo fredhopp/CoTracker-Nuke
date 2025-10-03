@@ -25,8 +25,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import threading
 import os
 
-# Fix OpenBLAS warning for high-core count systems
-os.environ['OPENBLAS_NUM_THREADS'] = str(min(24, mp.cpu_count()))
+# OpenBLAS environment variables are set in the batch file to avoid threading issues
 
 
 class STMapExporter:

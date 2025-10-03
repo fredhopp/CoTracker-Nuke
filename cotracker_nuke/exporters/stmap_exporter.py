@@ -741,26 +741,6 @@ class STMapExporter:
                 )
                 result[:, i] = interpolated
             
-            # Handle NaN values (areas outside convex hull) with vectorized nearest neighbor
-            nan_mask = np.isnan(result).any(axis=1)
-            if np.any(nan_mask):
-                nan_indices = np.where(nan_mask)[0]
-                nan_points = query_points[nan_indices]
-                
-                # Vectorized approach: find closest tracker for all NaN points at once
-                # Reshape for broadcasting: (N_nan, 1, 2) - (1, N_trackers, 2)
-                nan_points_reshaped = nan_points[:, np.newaxis, :]  # (N_nan, 1, 2)
-                current_pos_reshaped = current_pos[np.newaxis, :, :]  # (1, N_trackers, 2)
-                
-                # Calculate distances for all combinations at once
-                distances = np.sqrt(np.sum((nan_points_reshaped - current_pos_reshaped)**2, axis=2))  # (N_nan, N_trackers)
-                
-                # Find closest tracker for each NaN point
-                nearest_indices = np.argmin(distances, axis=1)  # (N_nan,)
-                
-                # Use reference position from closest tracker
-                result[nan_indices] = reference_pos[nearest_indices]
-            
             return result
             
         except Exception as e:
@@ -782,42 +762,11 @@ class STMapExporter:
                 )
                 result[:, i] = interpolated
             
-            # Handle NaN values (areas outside convex hull) with vectorized nearest neighbor
-            nan_mask = np.isnan(result).any(axis=1)
-            if np.any(nan_mask):
-                nan_indices = np.where(nan_mask)[0]
-                nan_points = query_points[nan_indices]
-                
-                # Vectorized approach: find closest tracker for all NaN points at once
-                # Reshape for broadcasting: (N_nan, 1, 2) - (1, N_trackers, 2)
-                nan_points_reshaped = nan_points[:, np.newaxis, :]  # (N_nan, 1, 2)
-                current_pos_reshaped = current_pos[np.newaxis, :, :]  # (1, N_trackers, 2)
-                
-                # Calculate distances for all combinations at once
-                distances = np.sqrt(np.sum((nan_points_reshaped - current_pos_reshaped)**2, axis=2))  # (N_nan, N_trackers)
-                
-                # Find closest tracker for each NaN point
-                nearest_indices = np.argmin(distances, axis=1)  # (N_nan,)
-                
-                # Use reference position from closest tracker
-                result[nan_indices] = reference_pos[nearest_indices]
-            
             return result
             
         except Exception as e:
             self.logger.error(f"Linear interpolation failed: {e}")
-            # Fallback to vectorized nearest neighbor for all points
-            # Reshape for broadcasting: (N_points, 1, 2) - (1, N_trackers, 2)
-            query_points_reshaped = query_points[:, np.newaxis, :]  # (N_points, 1, 2)
-            current_pos_reshaped = current_pos[np.newaxis, :, :]  # (1, N_trackers, 2)
-            
-            # Calculate distances for all combinations at once
-            distances = np.sqrt(np.sum((query_points_reshaped - current_pos_reshaped)**2, axis=2))  # (N_points, N_trackers)
-            
-            # Find closest tracker for each point
-            nearest_indices = np.argmin(distances, axis=1)  # (N_points,)
-            
-            return reference_pos[nearest_indices]
+            raise e
     
     def _convert_to_nuke_coordinates(self, stmap: np.ndarray, is_normalized: bool = False) -> np.ndarray:
         """
@@ -1320,84 +1269,6 @@ class STMapExporter:
             self.logger.error(f"Mask warping with segment algorithm failed: {e}")
             return mask  # Return original mask if warping fails
 
-    def _warp_mask_with_trackers(self, mask: np.ndarray, reference_tracks: np.ndarray, current_tracks: np.ndarray) -> np.ndarray:
-        """Warp mask based on tracker movement (same logic as animated mask export)."""
-        try:
-            height, width = mask.shape
-            warped_mask = np.zeros_like(mask)
-            
-            # Create coordinate grids
-            y_coords, x_coords = np.mgrid[0:height, 0:width]
-            points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
-            
-            # Calculate displacement vectors (reference - current) for backward mapping
-            displacement_vectors = reference_tracks - current_tracks
-            
-            # Interpolate displacement vectors using linear interpolation
-            interpolated_displacements = griddata(
-                reference_tracks,
-                displacement_vectors,
-                points,
-                method='linear',
-                fill_value=np.nan
-            )
-            
-            # Handle NaN values (outside convex hull) with vectorized nearest neighbor
-            nan_mask = np.isnan(interpolated_displacements[:, 0])
-            if np.any(nan_mask):
-                nan_indices = np.where(nan_mask)[0]
-                nan_points = points[nan_indices]
-                
-                # Vectorized approach: find closest tracker for all NaN points at once
-                nan_points_reshaped = nan_points[:, np.newaxis, :]  # (N_nan, 1, 2)
-                ref_tracks_reshaped = reference_tracks[np.newaxis, :, :]  # (1, N_trackers, 2)
-                
-                # Calculate distances for all combinations at once
-                distances = np.sqrt(np.sum((nan_points_reshaped - ref_tracks_reshaped)**2, axis=2))  # (N_nan, N_trackers)
-                
-                # Find closest tracker for each NaN point
-                closest_indices = np.argmin(distances, axis=1)  # (N_nan,)
-                
-                # Use displacement from closest tracker
-                interpolated_displacements[nan_mask] = displacement_vectors[closest_indices]
-            
-            # Reshape interpolated displacements back to image shape
-            dx = interpolated_displacements[:, 0].reshape(height, width)
-            dy = interpolated_displacements[:, 1].reshape(height, width)
-            
-            # Create source coordinates
-            source_x = x_coords + dx
-            source_y = y_coords + dy
-            
-            # Warp the mask using vectorized bilinear interpolation
-            valid_mask = (source_x >= 0) & (source_x < width-1) & (source_y >= 0) & (source_y < height-1)
-            
-            # For valid coordinates, use bilinear interpolation
-            if np.any(valid_mask):
-                # Get integer and fractional parts
-                x1 = np.floor(source_x[valid_mask]).astype(int)
-                y1 = np.floor(source_y[valid_mask]).astype(int)
-                x2 = np.minimum(x1 + 1, width - 1)
-                y2 = np.minimum(y1 + 1, height - 1)
-                fx = source_x[valid_mask] - x1
-                fy = source_y[valid_mask] - y1
-                
-                # Bilinear interpolation
-                val = (mask[y1, x1] * (1-fx) * (1-fy) +
-                       mask[y1, x2] * fx * (1-fy) +
-                       mask[y2, x1] * (1-fx) * fy +
-                       mask[y2, x2] * fx * fy)
-                
-                warped_mask[valid_mask] = val.astype(np.uint8)
-            
-            # For invalid coordinates, use original pixel
-            warped_mask[~valid_mask] = mask[~valid_mask]
-            
-            return warped_mask
-            
-        except Exception as e:
-            self.logger.error(f"Error warping mask: {e}")
-            return mask  # Return original mask if warping fails
     
     def _save_exr(self, stmap: np.ndarray, filepath: Path, bit_depth: int, metadata: Optional[dict] = None):
         """Save STMap as RGBA EXR file."""

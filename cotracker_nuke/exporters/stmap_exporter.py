@@ -23,6 +23,10 @@ import psutil
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import threading
+import os
+
+# Fix OpenBLAS warning for high-core count systems
+os.environ['OPENBLAS_NUM_THREADS'] = str(min(24, mp.cpu_count()))
 
 
 class STMapExporter:
@@ -137,6 +141,10 @@ class STMapExporter:
             timestamp = frame_data['timestamp']
             reference_frame = frame_data['reference_frame']
             
+            # Debug logging for first few frames
+            if frame_idx <= 2:
+                self.logger.debug(f"🔄 Processing frame {frame_idx} (0-based) with {len(visible_current_tracks)} trackers")
+            
             # Generate STMap for this frame
             stmap = self._generate_frame_stmap(
                 mask, 
@@ -154,6 +162,10 @@ class STMapExporter:
                 filename = f"CoTracker_{timestamp}_stmap.{actual_frame_number:04d}.exr"
             frame_path = output_dir / filename
             
+            # Debug logging for first few frames
+            if frame_idx <= 2:
+                self.logger.debug(f"💾 Saving frame {frame_idx} as {filename} (display frame {actual_frame_number})")
+            
             # Create metadata
             frame_metadata = {
                 'referenceFrame': str(reference_frame + frame_offset)
@@ -161,6 +173,10 @@ class STMapExporter:
             
             # Save EXR file
             self._save_exr(stmap, frame_path, 32, frame_metadata)
+            
+            # Debug logging for first few frames
+            if frame_idx <= 2:
+                self.logger.debug(f"✅ Saved frame {frame_idx} to {frame_path}")
             
             return frame_idx, str(frame_path)
             
@@ -427,6 +443,7 @@ class STMapExporter:
             
             # Process frames in parallel
             self.logger.info(f"Processing {total_frames} frames with {parallelization_info['optimal_workers']} parallel workers...")
+            self.logger.info(f"Frame range: {start_idx} to {end_idx} (0-based), frame offset: {frame_offset}")
             start_time = time.time()
             
             with ThreadPoolExecutor(max_workers=parallelization_info['optimal_workers']) as executor:
@@ -441,6 +458,11 @@ class STMapExporter:
                     try:
                         frame_idx, output_path = future.result()
                         processed_frames += 1
+                        
+                        # Log first few frames for debugging
+                        if processed_frames <= 3:
+                            current_frame_number = frame_idx + frame_offset
+                            self.logger.info(f"✅ Completed frame {processed_frames}/{total_frames} (0-based: {frame_idx}, display: {current_frame_number}) -> {output_path}")
                         
                         # Update progress callback
                         if progress_callback:

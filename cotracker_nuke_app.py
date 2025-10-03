@@ -19,6 +19,12 @@ Author: AI Assistant (under human supervision)
 License: MIT
 """
 
+import os
+import multiprocessing as mp
+
+# Fix OpenBLAS warning for high-core count systems (set early)
+os.environ['OPENBLAS_NUM_THREADS'] = str(min(24, mp.cpu_count()))
+
 import argparse
 import sys
 from pathlib import Path

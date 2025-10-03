@@ -1192,7 +1192,7 @@ class GradioInterface:
             
             with gr.Group():
                 with gr.Row():
-                    gr.Markdown("**.nk Output File Path**")
+                    gr.Markdown("**.nk Output File Path**", elem_classes="yellow-label")
                     file_picker_btn = gr.Button(
                         "📂 Browse",
                         size="sm",
@@ -1275,7 +1275,7 @@ class GradioInterface:
             
             with gr.Group():
                 with gr.Row():
-                    gr.Markdown("**STMap Output File Path**")
+                    gr.Markdown("**STMap Output File Path**", elem_classes="green-label")
                     stmap_file_picker_btn = gr.Button(
                         "📂 Browse",
                         size="sm",

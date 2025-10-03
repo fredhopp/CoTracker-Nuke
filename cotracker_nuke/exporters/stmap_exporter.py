@@ -24,8 +24,68 @@ import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import threading
 import os
+import pickle
 
 # OpenBLAS environment variables are set in the batch file to avoid threading issues
+
+def _process_frame_standalone(frame_data: dict) -> Tuple[int, str]:
+    """
+    Standalone function for processing a single frame in a separate process.
+    This function must be at module level to be picklable for ProcessPoolExecutor.
+    """
+    try:
+        # Import here to avoid circular imports
+        from .stmap_exporter import STMapExporter
+        
+        frame_idx = frame_data['frame_idx']
+        mask = frame_data['mask']
+        visible_reference_tracks = frame_data['visible_reference_tracks']
+        visible_current_tracks = frame_data['visible_current_tracks']
+        valid_trackers = frame_data['valid_trackers']
+        interpolation_method = frame_data['interpolation_method']
+        frame_offset = frame_data['frame_offset']
+        output_dir = frame_data['output_dir']
+        output_file_path = frame_data['output_file_path']
+        timestamp = frame_data['timestamp']
+        reference_frame = frame_data['reference_frame']
+        
+        # Create a temporary exporter instance for processing
+        exporter = STMapExporter()
+        # Set the required attributes from the frame data
+        exporter.reference_frame = frame_data.get('reference_frame', 0)
+        exporter.video_height = frame_data.get('video_height', 1080)
+        exporter.video_width = frame_data.get('video_width', 1920)
+        
+        # Generate STMap for this frame
+        stmap = exporter._generate_frame_stmap(
+            mask, 
+            visible_reference_tracks, 
+            visible_current_tracks,
+            valid_trackers,
+            interpolation_method
+        )
+        
+        # Save as RGBA EXR
+        actual_frame_number = frame_idx + frame_offset
+        if output_file_path and "%04d" in output_file_path:
+            filename = Path(output_file_path).name % actual_frame_number
+        else:
+            filename = f"CoTracker_{timestamp}_stmap.{actual_frame_number:04d}.exr"
+        frame_path = output_dir / filename
+        
+        # Create metadata
+        frame_metadata = {
+            'referenceFrame': str(reference_frame + frame_offset)
+        }
+        
+        # Save EXR file
+        exporter._save_exr(stmap, frame_path, 32, frame_metadata)
+        
+        return frame_idx, str(frame_path)
+        
+    except Exception as e:
+        # Return error information
+        return frame_data.get('frame_idx', -1), f"ERROR: {str(e)}"
 
 
 class STMapExporter:
@@ -112,9 +172,13 @@ class STMapExporter:
         # Calculate CPU-based limit
         cpu_limited_workers = int(max_cpu_usage)
         
-        # Use the more restrictive limit, but cap at 8 for I/O bound tasks
-        # EXR file writing is the bottleneck, not CPU computation
-        optimal_workers = min(memory_limited_workers, cpu_limited_workers, total_frames, 8)
+        # For ProcessPoolExecutor, use more conservative memory limits
+        # Each process has its own Python interpreter and memory space
+        process_memory_multiplier = 3  # Each process uses ~3x more memory than a thread
+        process_memory_limited_workers = int(memory_limited_workers / process_memory_multiplier)
+        
+        # Use the more restrictive limit for process-based parallelization
+        optimal_workers = min(process_memory_limited_workers, cpu_limited_workers, total_frames)
         optimal_workers = max(1, optimal_workers)  # At least 1 worker
         
         return {
@@ -450,10 +514,11 @@ class STMapExporter:
             remaining_frames = total_frames - 1  # First frame already processed
             optimal_workers = parallelization_info['optimal_workers']
             
-            # For I/O bound tasks, assume minimal parallelization benefit
-            # Most time is spent writing EXR files, which is largely sequential
-            io_efficiency = 0.1  # 10% efficiency (very conservative for file I/O)
-            realistic_estimate = single_frame_time * remaining_frames / (optimal_workers * io_efficiency)
+            # For ProcessPoolExecutor, assume better parallelization for CPU-bound computation
+            # STMap generation is CPU-intensive, EXR writing is I/O bound
+            # Assume 60% efficiency for CPU-bound tasks with ProcessPoolExecutor
+            cpu_efficiency = 0.6  # 60% efficiency (realistic for CPU-bound tasks)
+            realistic_estimate = single_frame_time * remaining_frames / (optimal_workers * cpu_efficiency)
             realistic_minutes = int(realistic_estimate // 60)
             realistic_seconds = int(realistic_estimate % 60)
             self.logger.info(f"📊 Realistic processing estimate: {realistic_minutes:02d}:{realistic_seconds:02d} (includes parallel overhead)")
@@ -488,7 +553,9 @@ class STMapExporter:
                     'output_dir': output_dir,
                     'output_file_path': output_file_path,
                     'timestamp': timestamp,
-                    'reference_frame': self.reference_frame
+                    'reference_frame': self.reference_frame,
+                    'video_height': self.video_height,
+                    'video_width': self.video_width
                 }
                 frame_data_list.append(frame_data)
             
@@ -499,41 +566,46 @@ class STMapExporter:
             self.logger.info(f"Frame range: {start_idx + 1} to {end_idx} (0-based), frame offset: {frame_offset}")
             start_time = time.time()
             
-            with ThreadPoolExecutor(max_workers=parallelization_info['optimal_workers']) as executor:
+            with ProcessPoolExecutor(max_workers=parallelization_info['optimal_workers']) as executor:
                 # Submit all frame processing tasks
                 future_to_frame = {
-                    executor.submit(self._process_frame_parallel, frame_data): frame_data['frame_idx'] 
+                    executor.submit(_process_frame_standalone, frame_data): frame_data['frame_idx'] 
                     for frame_data in frame_data_list
                 }
                 
-            self.logger.info(f"🚀 Submitted {len(future_to_frame)} frame processing tasks to {parallelization_info['optimal_workers']} worker threads")
-            self.logger.info(f"📊 Thread pool will process frames in parallel - watch for different thread IDs in debug logs")
-            self.logger.info(f"⏱️  Processing will start immediately with {parallelization_info['optimal_workers']} parallel workers")
+            self.logger.info(f"🚀 Submitted {len(future_to_frame)} frame processing tasks to {parallelization_info['optimal_workers']} worker processes")
+            self.logger.info(f"📊 Process pool will process frames in true parallel - no GIL limitations")
+            self.logger.info(f"⏱️  Processing will start immediately with {parallelization_info['optimal_workers']} parallel processes")
             
-            # Track thread usage for debugging
-            active_threads = set()
+            # Track process completion for debugging
+            completed_processes = set()
             
             # Process completed frames as they finish (true parallel processing)
             for future in as_completed(future_to_frame):
                 try:
-                    frame_idx, output_path, thread_id = future.result()
+                    frame_idx, output_path = future.result()
                     processed_frames += 1
                     
-                    # Track thread usage
-                    active_threads.add(thread_id)
+                    # Track process completion
+                    completed_processes.add(frame_idx)
                     
-                    # Log first few frames for debugging with thread info
+                    # Check for errors in the result
+                    if output_path.startswith("ERROR:"):
+                        self.logger.error(f"Process error for frame {frame_idx}: {output_path}")
+                        raise Exception(f"Frame {frame_idx} processing failed: {output_path}")
+                    
+                    # Log first few frames for debugging
                     if processed_frames <= 3:
                         current_frame_number = frame_idx + frame_offset
-                        self.logger.info(f"✅ Thread {thread_id}: Completed frame {processed_frames}/{total_frames} (0-based: {frame_idx}, display: {current_frame_number}) -> {output_path}")
+                        self.logger.info(f"✅ Process completed frame {processed_frames}/{total_frames} (0-based: {frame_idx}, display: {current_frame_number}) -> {output_path}")
                     
                     # Update progress callback
                     if progress_callback:
                         progress_callback(processed_frames, total_frames)
                     
-                    if processed_frames % 10 == 0:  # Log every 10 frames with thread activity
+                    if processed_frames % 10 == 0:  # Log every 10 frames
                         current_frame_number = frame_idx + frame_offset
-                        self.logger.info(f"Completed {processed_frames}/{total_frames} frames (frame {current_frame_number}) - Active threads: {len(active_threads)}")
+                        self.logger.info(f"Completed {processed_frames}/{total_frames} frames (frame {current_frame_number}) - Active processes: {len(completed_processes)}")
                         
                 except Exception as e:
                     frame_idx = future_to_frame[future]
@@ -544,7 +616,7 @@ class STMapExporter:
             total_processing_time = end_time - start_time
             self.logger.info(f"Parallel processing completed in {total_processing_time:.1f}s "
                            f"({total_frames/total_processing_time:.1f} frames/second)")
-            self.logger.info(f"🧵 Thread usage summary: {len(active_threads)} unique threads used out of {parallelization_info['optimal_workers']} available")
+            self.logger.info(f"🔄 Process usage summary: {len(completed_processes)} frames processed using {parallelization_info['optimal_workers']} worker processes")
             
             # Count generated files
             exr_files = list(output_dir.glob("*.exr"))
@@ -757,7 +829,6 @@ class STMapExporter:
         Convert STMap coordinates to Nuke coordinate system.
         
         CoTracker uses top-left origin (0,0), Nuke uses bottom-left origin.
-        Nuke's STMap node expects pixel-corner coordinates, so we add 0.5 pixel offset.
         
         Args:
             stmap: STMap array (H, W, 2) with coordinates
@@ -769,10 +840,6 @@ class STMapExporter:
             # Normalize coordinates to 0-1 range
             stmap[:, :, 0] = stmap[:, :, 0] / width   # X coordinate (S)
             stmap[:, :, 1] = stmap[:, :, 1] / height  # Y coordinate (T)
-        
-        # Add 0.5 pixel offset for Nuke's STMap node (pixel-corner vs pixel-center)
-        stmap[:, :, 0] = stmap[:, :, 0] + 0.5 / width   # X coordinate offset
-        stmap[:, :, 1] = stmap[:, :, 1] + 0.5 / height  # Y coordinate offset
         
         # Convert Y coordinate from top-left to bottom-left origin
         stmap[:, :, 1] = 1.0 - stmap[:, :, 1]

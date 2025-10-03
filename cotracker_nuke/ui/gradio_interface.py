@@ -175,15 +175,6 @@ class GradioInterface:
             self.logger.error(error_msg)
             return error_msg, None
     
-    def clear_vram(self) -> str:
-        """Clear GPU memory manually."""
-        try:
-            result = self.app.clear_vram()
-            return result
-        except Exception as e:
-            error_msg = f"❌ Error clearing VRAM: {str(e)}"
-            self.logger.error(error_msg)
-            return error_msg
     
     def use_mask_from_editor(self, edited_image: Any) -> str:
         """Process and use mask from Gradio ImageEditor (non-blocking)."""
@@ -1168,11 +1159,6 @@ class GradioInterface:
                         size="lg"
                     )
                     
-                    clear_vram_btn = gr.Button(
-                        "🧹 Clear VRAM",
-                        variant="secondary",
-                        size="lg"
-                    )
             
             processing_status = gr.Textbox(
                 label="⚙️ Processing Status",
@@ -1358,10 +1344,6 @@ class GradioInterface:
                 outputs=[processing_status, preview_video]
             )
             
-            clear_vram_btn.click(
-                fn=self.clear_vram,
-                outputs=[processing_status]
-            )
             
             # Event handlers
             

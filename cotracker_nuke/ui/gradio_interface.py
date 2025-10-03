@@ -210,6 +210,15 @@ class GradioInterface:
         output_dir.mkdir(exist_ok=True)
         return f"outputs/CoTracker_{timestamp}_stmap/CoTracker_{timestamp}_stmap.%04d.exr"
     
+    def get_default_enhanced_stmap_output_path(self) -> str:
+        """Get default Enhanced STMap output file path."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Create outputs directory if it doesn't exist
+        output_dir = Path("outputs")
+        output_dir.mkdir(exist_ok=True)
+        return f"outputs/CoTracker_{timestamp}_enhanced_stmap/CoTracker_{timestamp}_enhanced_stmap.%04d.exr"
+    
     def browse_output_folder(self) -> str:
         """Open file dialog to browse for output location."""
         try:
@@ -317,6 +326,60 @@ class GradioInterface:
             import traceback
             self.logger.error(traceback.format_exc())
             return self.get_default_stmap_output_path()
+    
+    def browse_enhanced_stmap_output_folder(self) -> str:
+        """Open file dialog to browse for Enhanced STMap output location."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            # Create a root window and hide it
+            root = tk.Tk()
+            root.withdraw()
+            root.wm_attributes('-topmost', 1)  # Keep dialog on top
+            
+            # Get current output path directory
+            current_path = self.get_default_enhanced_stmap_output_path()
+            current_dir = os.path.dirname(os.path.abspath(current_path))
+            
+            # Ensure output directory exists
+            os.makedirs(current_dir, exist_ok=True)
+            
+            # Open file dialog
+            file_path = filedialog.asksaveasfilename(
+                title="Save Enhanced STMap sequence as...",
+                initialdir=current_dir,
+                defaultextension=".exr",
+                filetypes=[("EXR files", "*.exr"), ("All files", "*.*")],
+                initialfile=os.path.basename(current_path)
+            )
+            
+            # Clean up the root window
+            root.destroy()
+            
+            if file_path:
+                # Convert to forward slashes and return relative path if possible
+                file_path = file_path.replace('\\', '/')
+                try:
+                    # Try to make it relative to current working directory
+                    rel_path = os.path.relpath(file_path)
+                    return rel_path.replace('\\', '/')
+                except ValueError:
+                    # If relative path fails, return absolute path
+                    return file_path
+            else:
+                # User cancelled, return current path
+                self.logger.info("Enhanced STMap file dialog cancelled by user")
+                return self.get_default_enhanced_stmap_output_path()
+                
+        except ImportError:
+            self.logger.warning("tkinter not available for file dialog, using default path")
+            return self.get_default_enhanced_stmap_output_path()
+        except Exception as e:
+            self.logger.error(f"Error in Enhanced STMap file browser: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return self.get_default_enhanced_stmap_output_path()
     
     def update_stmap_frame_defaults(self, reference_video, image_sequence_start_frame) -> Tuple[dict, dict]:
         """Update STMap frame defaults based on video and image sequence start frame."""
@@ -773,8 +836,10 @@ class GradioInterface:
                     
                     self.logger.debug(f"Frame {frame_idx}: {visible_count} visible trackers")
                     
-                    # Warp mask based on tracker movement
-                    animated_mask = self._warp_mask_with_trackers(
+                    # Warp mask using the same segment-based algorithm as enhanced EXR
+                    stmap_exporter = STMapExporter()
+                    stmap_exporter.set_video_dimensions(width, height)
+                    animated_mask = stmap_exporter._warp_mask_with_segment_algorithm(
                         original_mask, 
                         visible_reference_tracks_current, 
                         visible_current_tracks
@@ -811,116 +876,14 @@ class GradioInterface:
             self.logger.error(error_msg)
             return error_msg
     
-    def _warp_mask_with_trackers(self, mask: np.ndarray, reference_tracks: np.ndarray, current_tracks: np.ndarray) -> np.ndarray:
-        """
-        Hybrid mask warping: interpolation inside tracker bounds, block offset outside.
-        Uses same logic as STMap for smooth areas, block movement for sparse areas.
-        """
-        try:
-            self.logger.debug(f"Starting mask warping: mask shape {mask.shape}, ref tracks {reference_tracks.shape}, curr tracks {current_tracks.shape}")
-            
-            from scipy.interpolate import griddata
-            
-            height, width = mask.shape
-            warped_mask = np.zeros_like(mask)
-            
-            # Create coordinate grids
-            self.logger.debug("Creating coordinate grids...")
-            y_coords, x_coords = np.mgrid[0:height, 0:width]
-            points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
-            self.logger.debug(f"Created {len(points)} coordinate points")
-            
-            # Calculate displacement vectors (reference - current) for backward mapping
-            self.logger.debug("Calculating displacement vectors...")
-            displacement_vectors = reference_tracks - current_tracks
-            self.logger.debug(f"Displacement vectors shape: {displacement_vectors.shape}")
-            
-            # Interpolate displacement vectors using linear interpolation
-            self.logger.debug("Starting griddata interpolation...")
-            interpolated_displacements = griddata(
-                reference_tracks,
-                displacement_vectors,
-                points,
-                method='linear',
-                fill_value=np.nan
-            )
-            self.logger.debug("Griddata interpolation completed")
-            
-            # Handle NaN values (outside convex hull) with block offset logic
-            self.logger.debug("Handling NaN values...")
-            nan_mask = np.isnan(interpolated_displacements[:, 0])
-            nan_count = np.sum(nan_mask)
-            self.logger.debug(f"Found {nan_count} NaN values to handle")
-            
-            if np.any(nan_mask):
-                # For pixels outside convex hull, use closest tracker offset
-                nan_points = points[nan_mask]
-                self.logger.debug(f"Processing {len(nan_points)} NaN points...")
-                
-                # Vectorized approach: find closest tracker for all NaN points at once
-                # Reshape for broadcasting: (N_nan, 1, 2) - (1, N_trackers, 2)
-                nan_points_reshaped = nan_points[:, np.newaxis, :]  # (N_nan, 1, 2)
-                ref_tracks_reshaped = reference_tracks[np.newaxis, :, :]  # (1, N_trackers, 2)
-                
-                # Calculate distances for all combinations at once
-                distances = np.sqrt(np.sum((nan_points_reshaped - ref_tracks_reshaped)**2, axis=2))  # (N_nan, N_trackers)
-                
-                # Find closest tracker for each NaN point
-                closest_indices = np.argmin(distances, axis=1)  # (N_nan,)
-                
-                # Use displacement from closest tracker
-                interpolated_displacements[nan_mask] = displacement_vectors[closest_indices]
-                self.logger.debug("Completed vectorized NaN handling")
-            
-            # Reshape interpolated displacements back to image shape
-            self.logger.debug("Reshaping displacements...")
-            dx = interpolated_displacements[:, 0].reshape(height, width)
-            dy = interpolated_displacements[:, 1].reshape(height, width)
-            
-            # Create source coordinates
-            source_x = x_coords + dx
-            source_y = y_coords + dy
-            
-            # Warp the mask using vectorized bilinear interpolation
-            self.logger.debug("Starting vectorized bilinear interpolation...")
-            
-            # Create masks for valid coordinates
-            valid_mask = (source_x >= 0) & (source_x < width-1) & (source_y >= 0) & (source_y < height-1)
-            
-            # For valid coordinates, use bilinear interpolation
-            if np.any(valid_mask):
-                # Get integer and fractional parts
-                x1 = np.floor(source_x[valid_mask]).astype(int)
-                y1 = np.floor(source_y[valid_mask]).astype(int)
-                x2 = np.minimum(x1 + 1, width - 1)
-                y2 = np.minimum(y1 + 1, height - 1)
-                fx = source_x[valid_mask] - x1
-                fy = source_y[valid_mask] - y1
-                
-                # Bilinear interpolation
-                val = (mask[y1, x1] * (1-fx) * (1-fy) +
-                       mask[y1, x2] * fx * (1-fy) +
-                       mask[y2, x1] * (1-fx) * fy +
-                       mask[y2, x2] * fx * fy)
-                
-                warped_mask[valid_mask] = val.astype(np.uint8)
-            
-            # For invalid coordinates, use original pixel
-            warped_mask[~valid_mask] = mask[~valid_mask]
-            
-            self.logger.debug("Mask warping completed successfully")
-            return warped_mask
-            
-        except Exception as e:
-            self.logger.error(f"Error warping mask: {e}")
-            return mask  # Return original mask if warping fails
     
     def export_enhanced_stmap_sequence(self, 
                                      interpolation_method: str,
                                      bit_depth: int,
                                      frame_start: int,
                                      frame_end: Optional[int],
-                                     image_sequence_start_frame: int = 1001) -> str:
+                                     image_sequence_start_frame: int = 1001,
+                                     output_file_path: str = None) -> str:
         """Export enhanced STMap sequence with mask-aware intelligent interpolation."""
         try:
             self.logger.info(f"Starting enhanced STMap export with parameters: interpolation={interpolation_method}, bit_depth={bit_depth}, frame_start={frame_start}, frame_end={frame_end}, offset={image_sequence_start_frame}")
@@ -951,6 +914,10 @@ class GradioInterface:
                 height, width = self.app.video_processor.current_video.shape[1:3]
                 stmap_exporter.set_video_dimensions(width, height)
             
+            # Use provided output path or generate default
+            if output_file_path is None or output_file_path.strip() == "":
+                output_file_path = self.get_default_enhanced_stmap_output_path()
+            
             # Generate enhanced STMap sequence
             output_dir = stmap_exporter.generate_enhanced_stmap_sequence(
                 tracks=tracks,
@@ -961,6 +928,7 @@ class GradioInterface:
                 frame_start=frame_start,
                 frame_end=frame_end,
                 frame_offset=image_sequence_start_frame,
+                output_file_path=output_file_path,
                 progress_callback=None  # Could add progress callback here if needed
             )
             
@@ -1261,6 +1229,20 @@ class GradioInterface:
             Combines STMap coordinates with animated mask in a single EXR sequence.
             """)
             
+            with gr.Row():
+                enhanced_stmap_output_file_path = gr.Textbox(
+                    label="📁 Enhanced STMap Output File Path",
+                    value=self.get_default_enhanced_stmap_output_path(),
+                    info="Path pattern for RGBA EXR sequence (use %04d for frame numbers)",
+                    scale=3
+                )
+                
+                enhanced_stmap_file_picker_btn = gr.Button(
+                    "📂 Browse",
+                    size="sm",
+                    scale=1
+                )
+            
             enhanced_stmap_export_btn = gr.Button(
                 "🚀 Generate Enhanced STMap Sequence",
                 variant="primary",
@@ -1408,8 +1390,13 @@ class GradioInterface:
             
             enhanced_stmap_export_btn.click(
                 fn=self.export_enhanced_stmap_sequence,
-                inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame],
+                inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame, enhanced_stmap_output_file_path],
                 outputs=[enhanced_stmap_export_status]
+            )
+            
+            enhanced_stmap_file_picker_btn.click(
+                fn=self.browse_enhanced_stmap_output_folder,
+                outputs=[enhanced_stmap_output_file_path]
             )
             
             animated_mask_export_btn.click(

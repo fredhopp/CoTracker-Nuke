@@ -169,6 +169,7 @@ class STMapExporter:
                                         frame_start: int = 0,
                                         frame_end: Optional[int] = None,
                                         frame_offset: int = 1001,
+                                        output_file_path: str = None,
                                         progress_callback: Optional[callable] = None) -> str:
         """
         Generate enhanced STMap sequence with mask-aware intelligent interpolation.
@@ -232,9 +233,13 @@ class STMapExporter:
             
             visible_reference_tracks = reference_tracks[visible_mask]
             
-            # Create output directory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_dir = self.debug_dir / f"CoTracker_{timestamp}_enhanced_stmap"
+            # Create output directory from provided path or generate default
+            if output_file_path is None or output_file_path.strip() == "":
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_file_path = f"outputs/CoTracker_{timestamp}_enhanced_stmap/CoTracker_{timestamp}_enhanced_stmap.%04d.exr"
+            
+            # Extract directory from file path pattern
+            output_dir = Path(output_file_path).parent
             output_dir.mkdir(parents=True, exist_ok=True)
             
             total_frames = end_idx - start_idx + 1
@@ -246,31 +251,40 @@ class STMapExporter:
                 if frame_idx % 10 == 0:  # Log every 10 frames
                     self.logger.info(f"Processing enhanced STMap frame {frame_idx}/{end_idx}")
                 
-                # Get current frame tracks
-                current_tracks = tracks_np[frame_idx]
-                current_visibility = visibility_np[frame_idx]
-                
-                # Filter visible current trackers (same indices as reference)
-                visible_current_tracks = current_tracks[visible_mask]
-                current_visibility_values = current_visibility[visible_mask]
-                valid_trackers = current_visibility_values > 0.5
-                
-                if not np.any(valid_trackers):
-                    # If no valid trackers, create identity STMap with original mask
+                # Check if this is the reference frame
+                if frame_idx == ref_frame_idx:
+                    # For reference frame: create perfect identity gradient for ALL pixels
                     stmap = self._generate_identity_stmap_with_mask(mask)
                 else:
-                    # Generate enhanced STMap with intelligent interpolation
-                    stmap = self._generate_enhanced_frame_stmap(
-                        mask, 
-                        visible_reference_tracks, 
-                        visible_current_tracks,
-                        valid_trackers,
-                        interpolation_method
-                    )
+                    # Get current frame tracks
+                    current_tracks = tracks_np[frame_idx]
+                    current_visibility = visibility_np[frame_idx]
+                    
+                    # Filter visible current trackers (same indices as reference)
+                    visible_current_tracks = current_tracks[visible_mask]
+                    current_visibility_values = current_visibility[visible_mask]
+                    valid_trackers = current_visibility_values > 0.5
+                    
+                    if not np.any(valid_trackers):
+                        # If no valid trackers, create identity STMap with original mask
+                        stmap = self._generate_identity_stmap_with_mask(mask)
+                    else:
+                        # Generate enhanced STMap with intelligent interpolation
+                        stmap = self._generate_enhanced_frame_stmap(
+                            mask, 
+                            visible_reference_tracks, 
+                            visible_current_tracks,
+                            valid_trackers,
+                            interpolation_method
+                        )
                 
                 # Save as RGBA EXR
                 actual_frame_number = frame_idx + frame_offset
-                filename = f"CoTracker_{timestamp}_enhanced_stmap.{actual_frame_number:04d}.exr"
+                # Use the provided filename pattern or generate default
+                if output_file_path and "%04d" in output_file_path:
+                    filename = Path(output_file_path).name % actual_frame_number
+                else:
+                    filename = f"CoTracker_{timestamp}_enhanced_stmap.{actual_frame_number:04d}.exr"
                 frame_path = output_dir / filename
                 
                 self.logger.debug(f"Saving enhanced STMap frame {actual_frame_number} to {frame_path}")
@@ -629,38 +643,72 @@ class STMapExporter:
             else:
                 mask_resized = mask
             
-            # 1. First, warp the mask using the same logic as animated mask export
-            warped_mask = self._warp_mask_with_trackers(mask_resized, reference_tracks, current_tracks)
+            # 1. First, warp the mask using the same segment-based algorithm
+            # Note: We warp the original mask, not the resized one, to avoid double-masking
+            warped_mask = self._warp_mask_with_segment_algorithm(mask, reference_tracks, current_tracks)
             
-            # 2. Create coordinate grids (same as regular STMap)
+            # 2. Create coordinate grids
             y_coords, x_coords = np.mgrid[0:height, 0:width]
             points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
             
-            # 3. Generate STMap coordinates using EXACT same logic as regular STMap
-            # This ensures coordinates inside the hull are identical
+            # 3. Only process pixels inside the warped mask (much faster!)
+            warped_mask_bool = warped_mask > 0
+            warped_mask_indices = np.where(warped_mask_bool.ravel())[0]
+            
+            # Initialize STMap coordinates (will remain 0 for pixels outside warped mask)
             stmap_coords = np.zeros((len(points), 2), dtype=np.float32)
             
-            if interpolation_method == "cubic":
-                stmap_coords = self._interpolate_cubic(
-                    current_tracks, reference_tracks, points
-                )
-            else:  # linear
-                stmap_coords = self._interpolate_linear(
-                    current_tracks, reference_tracks, points
-                )
+            if len(warped_mask_indices) > 0:
+                self.logger.debug(f"Processing {len(warped_mask_indices)} pixels inside warped mask")
+                
+                # Get pixels inside the warped mask
+                warped_pixels = points[warped_mask_indices]
+                
+                # First, try regular interpolation for pixels inside hull
+                if interpolation_method == "cubic":
+                    interpolated_coords = self._interpolate_cubic(
+                        current_tracks, reference_tracks, warped_pixels
+                    )
+                else:  # linear
+                    interpolated_coords = self._interpolate_linear(
+                        current_tracks, reference_tracks, warped_pixels
+                    )
+                
+                # Identify pixels outside hull (NaN coordinates)
+                nan_mask = np.isnan(interpolated_coords).any(axis=1)
+                outside_hull_indices = np.where(nan_mask)[0]
+                inside_hull_indices = np.where(~nan_mask)[0]
+                
+                # Set coordinates for pixels inside hull
+                if len(inside_hull_indices) > 0:
+                    stmap_coords[warped_mask_indices[inside_hull_indices]] = interpolated_coords[inside_hull_indices]
+                
+                # Apply segment-based algorithm to pixels outside hull
+                if len(outside_hull_indices) > 0:
+                    self.logger.debug(f"Processing {len(outside_hull_indices)} pixels outside hull with segment-based algorithm")
+                    
+                    outside_hull_pixels = warped_pixels[outside_hull_indices]
+                    outside_hull_coords = self._calculate_block_offset_coordinates(
+                        outside_hull_pixels, reference_tracks, current_tracks
+                    )
+                    
+                    # Update the coordinates for pixels outside hull
+                    stmap_coords[warped_mask_indices[outside_hull_indices]] = outside_hull_coords
             
-            # 4. Reshape to image dimensions (same as regular STMap)
+            # 4. Reshape to image dimensions
             stmap_2d = stmap_coords.reshape(height, width, 2)
             
-            # 5. Convert to Nuke coordinates (same as regular STMap)
+            # 5. Convert to Nuke coordinates
             stmap_2d = self._convert_to_nuke_coordinates(stmap_2d)
             
             # 6. Create RGBA array: R=X, G=Y, B=0, A=warped_mask
             stmap = np.zeros((height, width, 4), dtype=np.float32)
-            stmap[:, :, 0] = stmap_2d[:, :, 0]  # R = X coordinates (same as regular STMap)
-            stmap[:, :, 1] = stmap_2d[:, :, 1]  # G = Y coordinates (same as regular STMap)
-            stmap[:, :, 2] = 0.0                # B = 0 (unused)
-            stmap[:, :, 3] = warped_mask.astype(np.float32) / 255.0  # A = warped mask (normalized)
+            
+            # Set STMap coordinates only for pixels inside the warped mask
+            stmap[warped_mask_bool, 0] = stmap_2d[warped_mask_bool, 0]  # R = X coordinates
+            stmap[warped_mask_bool, 1] = stmap_2d[warped_mask_bool, 1]  # G = Y coordinates
+            stmap[warped_mask_bool, 2] = 0.0                            # B = 0 (unused)
+            stmap[:, :, 3] = warped_mask.astype(np.float32) / 255.0     # A = warped mask (all pixels)
             
             return stmap
             
@@ -669,6 +717,160 @@ class STMapExporter:
             # Fallback to identity STMap with original mask
             return self._generate_identity_stmap_with_mask(mask)
     
+    def _calculate_block_offset_coordinates(self, 
+                                          pixel_coords: np.ndarray,
+                                          reference_tracks: np.ndarray,
+                                          current_tracks: np.ndarray) -> np.ndarray:
+        """
+        Calculate STMap coordinates for fringe pixels using block offset algorithm.
+        
+        For each pixel C' in current frame:
+        1. Find closest tracker segment A'B' (two nearest trackers)
+        2. Project C' perpendicularly onto A'B' → get point D'
+        3. Map D' to reference frame: D = A + t * (B - A) where t = A'D' / A'B'
+        4. Construct perpendicular through D in reference frame
+        5. Find C on perpendicular: DC = (|AB| / |A'B'|) * |D'C'|
+        6. Return C's coordinates for STMap
+        
+        Args:
+            pixel_coords: Array of pixel coordinates (N, 2) in current frame
+            reference_tracks: Reference frame tracker positions (M, 2)
+            current_tracks: Current frame tracker positions (M, 2)
+            
+        Returns:
+            Array of corresponding coordinates in reference frame (N, 2)
+        """
+        try:
+            num_pixels = len(pixel_coords)
+            result_coords = np.zeros((num_pixels, 2), dtype=np.float32)
+            
+            for i, pixel in enumerate(pixel_coords):
+                # Step 1: Given C', find closest segment A'B'
+                distances = np.linalg.norm(current_tracks - pixel, axis=1)
+                closest_indices = np.argsort(distances)[:2]  # Two closest trackers
+                A_idx, B_idx = closest_indices[0], closest_indices[1]
+                
+                A_prime = current_tracks[A_idx]  # A' in current frame
+                B_prime = current_tracks[B_idx]  # B' in current frame
+                A = reference_tracks[A_idx]      # A in reference frame
+                B = reference_tracks[B_idx]      # B in reference frame
+                
+                # Step 2a: Project C' onto the LINE through A'B' → get D'
+                AB_prime = B_prime - A_prime
+                AC_prime = pixel - A_prime
+                
+                # Calculate parameter t along the LINE through A'B' (not clamped to segment)
+                t = np.dot(AC_prime, AB_prime) / np.dot(AB_prime, AB_prime)
+                # No clamping - allow projections beyond segment endpoints
+                D_prime = A_prime + t * AB_prime
+                
+                # Step 2b: Find D on AB (corresponding point in reference frame)
+                D = A + t * (B - A)
+                
+                # Step 3: Find C along perpendicular line to AB going through D
+                # Calculate perpendicular distance from C' to segment A'B'
+                DC_prime_length = np.linalg.norm(pixel - D_prime)
+                
+                # Calculate perpendicular direction in reference frame
+                AB = B - A
+                AB_length = np.linalg.norm(AB)
+                AB_prime_length = np.linalg.norm(AB_prime)
+                
+                if AB_length > 0 and AB_prime_length > 0:
+                    # Perpendicular vector (rotated 90 degrees)
+                    perp_direction = np.array([AB[1], -AB[0]]) / AB_length
+                    
+                    # Proportional distance: AB/A'B' * D'C'
+                    scale_factor = AB_length / AB_prime_length
+                    DC_length = scale_factor * DC_prime_length
+                    
+                    # Determine which side of the segment (same side as in current frame)
+                    cross_product = np.cross(AC_prime, AB_prime)
+                    side_sign = 1 if cross_product >= 0 else -1
+                    
+                    # Find C on perpendicular through D
+                    C = D + side_sign * DC_length * perp_direction
+                    result_coords[i] = C
+                    
+                    # Debug: Log first few pixels to see what's happening
+                    if i < 5:  # Log first 5 pixels for more detail
+                        self.logger.debug(f"Pixel {i}: C'={pixel}")
+                        self.logger.debug(f"  A'={A_prime}, B'={B_prime}, A={A}, B={B}")
+                        self.logger.debug(f"  t={t:.4f}, D'={D_prime}, D={D}")
+                        self.logger.debug(f"  DC'={DC_prime_length:.4f}, DC={DC_length:.4f}, scale={scale_factor:.4f}")
+                        self.logger.debug(f"  C={C}, diff={pixel - C}")
+                        self.logger.debug(f"  ---")
+                else:
+                    # Fallback: use nearest tracker position
+                    result_coords[i] = A
+                    
+            return result_coords
+            
+        except Exception as e:
+            self.logger.error(f"Block offset calculation failed: {e}")
+            # Fallback: return nearest tracker positions
+            distances = np.linalg.norm(current_tracks[:, np.newaxis] - pixel_coords, axis=2)
+            closest_indices = np.argmin(distances, axis=0)
+            return reference_tracks[closest_indices]
+
+    def _warp_mask_with_segment_algorithm(self, mask: np.ndarray, reference_tracks: np.ndarray, current_tracks: np.ndarray) -> np.ndarray:
+        """Warp mask using the same segment-based algorithm as STMap coordinates."""
+        try:
+            height, width = mask.shape
+            warped_mask = np.zeros_like(mask)
+            
+            # Create coordinate grids
+            y_coords, x_coords = np.mgrid[0:height, 0:width]
+            points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
+            
+            # Process ALL pixels to create a fully warped mask
+            self.logger.debug(f"Warping all {len(points)} pixels with segment-based algorithm")
+            
+            # Apply segment-based algorithm to ALL pixels
+            warped_coords = self._calculate_block_offset_coordinates(
+                points, reference_tracks, current_tracks
+            )
+            
+            # For each pixel in current frame, sample from reference frame mask
+            for i, (current_idx, reference_coord) in enumerate(zip(range(len(points)), warped_coords)):
+                # Get current pixel position (where we're writing to)
+                current_y, current_x = divmod(current_idx, width)
+                
+                # Get reference coordinates (where to sample from in the reference mask)
+                x, y = reference_coord
+                
+                # Clamp coordinates to image bounds
+                x = np.clip(x, 0, width - 1)
+                y = np.clip(y, 0, height - 1)
+                
+                # Bilinear interpolation for smooth sampling
+                x0, y0 = int(x), int(y)
+                x1, y1 = min(x0 + 1, width - 1), min(y0 + 1, height - 1)
+                
+                # Get fractional parts
+                fx, fy = x - x0, y - y0
+                
+                # Sample four neighboring pixels from the reference mask
+                p00 = mask[y0, x0]
+                p01 = mask[y1, x0]
+                p10 = mask[y0, x1]
+                p11 = mask[y1, x1]
+                
+                # Bilinear interpolation
+                interpolated = (p00 * (1 - fx) * (1 - fy) +
+                              p10 * fx * (1 - fy) +
+                              p01 * (1 - fx) * fy +
+                              p11 * fx * fy)
+                
+                # Set the warped pixel value at the current position
+                warped_mask[current_y, current_x] = interpolated
+            
+            return warped_mask
+            
+        except Exception as e:
+            self.logger.error(f"Mask warping with segment algorithm failed: {e}")
+            return mask  # Return original mask if warping fails
+
     def _warp_mask_with_trackers(self, mask: np.ndarray, reference_tracks: np.ndarray, current_tracks: np.ndarray) -> np.ndarray:
         """Warp mask based on tracker movement (same logic as animated mask export)."""
         try:

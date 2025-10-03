@@ -19,7 +19,13 @@
 - [x] **Grid Point Spacing** - Check if the grid of points is taking the ratio of image as a parameter to have checkerboard like spacing
 - [ ] **Frame Rate Handling** - Check if the video is working at a set 24fps or properly considering 23.976 fps
 - [ ] **STMap Advanced Interpolation** - Implement memory-efficient bicubic interpolation for STMap generation (Delaunay removed due to memory issues)
-- [ ] **STMap Performance Optimization** - Apply vectorized NaN handling to STMap generation for better performance
+- [x] **STMap Performance Optimization** - Apply vectorized NaN handling to STMap generation for better performance
+- [ ] **Enhanced STMap Block Offset Technique** - Pixels inside mask but outside tracker hull need proper block offset implementation. Current approach needs clarification and refinement for optimal coordinate mapping in sparse tracking areas.
+- [ ] **Consolidate EXR Output** - Merge enhanced STMap functionality into regular STMap export:
+  - Regular STMap sequence should output RGBA EXR with embedded animated mask in alpha channel
+  - Remove separate "Enhanced STMap" section from UI (regular STMap handles everything)
+  - Remove "Animated Mask Export" section from UI (mask is embedded in STMap alpha channel)
+  - Single unified export provides both STMap coordinates and animated mask in one EXR sequence
 - [x] **STMap Frame Range Integration** - Start and end frame need to take the Image Sequence Start Frame into account. The parameter should default to first and last frame
 - [x] **STMap Output Path Handling** - The output path for EXR needs to be absolute in the status and clipboard
 - [x] **STMap Filename Convention** - The EXR filename needs to conform to our convention: the user needs to be able to pick a path the same way he does for the .nk file. It should default to CoTracker_date_time.%04d.exr ("." not "_" as a separator)
@@ -38,6 +44,11 @@
 ## Completed Tasks ✅
 
 ### Latest Updates (October 2, 2025)
+- [x] **Enhanced STMap Generation System** - Complete mask-aware STMap with RGBA output and intelligent interpolation
+- [x] **Enhanced STMap UI Integration** - New export button and status tracking for mask-aware STMap generation
+- [x] **Enhanced STMap Coordinate Consistency** - R/G channels now match regular STMap coordinates inside tracker hull
+- [x] **Enhanced STMap Frame Math Fix** - Corrected frame range conversion and reference frame handling
+- [x] **Enhanced STMap Debug Logging** - Comprehensive logging for troubleshooting and performance monitoring
 - [x] **Animated Mask Export System** - Complete animated mask sequence generation with hybrid warping
 - [x] **Hybrid Warping Algorithm** - Interpolation inside tracker bounds, block offset outside convex hull
 - [x] **Vectorized Performance Optimization** - Dramatic speed improvement using vectorized NaN handling
@@ -93,6 +104,8 @@ cotracker_nuke/
 ```
 
 ### Key Features Implemented
+- **Enhanced STMap Generation**: Mask-aware STMap with RGBA output (R=X, G=Y, B=0, A=warped mask)
+- **Intelligent Interpolation**: Coordinates inside tracker hull match regular STMap, animated mask in alpha channel
 - **Animated Mask Export**: Complete animated mask sequence generation with hybrid warping algorithm
 - **Hybrid Warping**: Interpolation inside tracker bounds, block offset outside convex hull for coherent movement
 - **Vectorized Performance**: Dramatic speed improvements using vectorized operations for NaN handling

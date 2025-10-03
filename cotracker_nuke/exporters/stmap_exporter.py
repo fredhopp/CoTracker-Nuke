@@ -11,13 +11,18 @@ for geometric transformations in compositing software like Nuke.
 import torch
 import numpy as np
 import cv2
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Callable
 import logging
 from pathlib import Path
 from datetime import datetime
 from scipy.interpolate import griddata
 import OpenEXR
 import Imath
+import multiprocessing as mp
+import psutil
+import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import threading
 
 
 class STMapExporter:
@@ -46,6 +51,122 @@ class STMapExporter:
         """Set video dimensions for coordinate conversion."""
         self.video_width = width
         self.video_height = height
+    
+    def _get_system_resources(self) -> dict:
+        """Get current system resource information."""
+        return {
+            'cpu_count': mp.cpu_count(),
+            'available_memory_gb': psutil.virtual_memory().available / (1024**3),
+            'total_memory_gb': psutil.virtual_memory().total / (1024**3),
+            'memory_percent': psutil.virtual_memory().percent,
+            'cpu_percent': psutil.cpu_percent(interval=1)
+        }
+    
+    def _analyze_single_frame_performance(self, 
+                                        mask: np.ndarray,
+                                        visible_reference_tracks: np.ndarray,
+                                        visible_current_tracks: np.ndarray,
+                                        valid_trackers: np.ndarray,
+                                        interpolation_method: str) -> dict:
+        """Analyze performance of processing a single frame to determine optimal parallelization."""
+        start_time = time.time()
+        start_memory = psutil.Process().memory_info().rss / (1024**2)  # MB
+        
+        # Process one frame
+        stmap = self._generate_enhanced_frame_stmap(
+            mask, 
+            visible_reference_tracks, 
+            visible_current_tracks,
+            valid_trackers,
+            interpolation_method
+        )
+        
+        end_time = time.time()
+        end_memory = psutil.Process().memory_info().rss / (1024**2)  # MB
+        
+        processing_time = end_time - start_time
+        memory_used = end_memory - start_memory
+        
+        return {
+            'processing_time': processing_time,
+            'memory_used_mb': memory_used,
+            'frame_size_mb': stmap.nbytes / (1024**2)
+        }
+    
+    def _calculate_optimal_parallelization(self, 
+                                         total_frames: int,
+                                         single_frame_analysis: dict,
+                                         system_resources: dict) -> dict:
+        """Calculate optimal number of parallel workers based on system resources."""
+        # Use up to 80% of available resources
+        max_memory_usage = system_resources['available_memory_gb'] * 0.8
+        max_cpu_usage = system_resources['cpu_count'] * 0.8
+        
+        # Calculate memory-based limit
+        memory_per_frame_gb = single_frame_analysis['memory_used_mb'] / 1024
+        memory_limited_workers = int(max_memory_usage / memory_per_frame_gb) if memory_per_frame_gb > 0 else 1
+        
+        # Calculate CPU-based limit
+        cpu_limited_workers = int(max_cpu_usage)
+        
+        # Use the more restrictive limit
+        optimal_workers = min(memory_limited_workers, cpu_limited_workers, total_frames)
+        optimal_workers = max(1, optimal_workers)  # At least 1 worker
+        
+        return {
+            'optimal_workers': optimal_workers,
+            'memory_limited_workers': memory_limited_workers,
+            'cpu_limited_workers': cpu_limited_workers,
+            'estimated_total_memory_gb': memory_per_frame_gb * optimal_workers,
+            'estimated_processing_time': single_frame_analysis['processing_time'] * total_frames / optimal_workers
+        }
+    
+    def _process_frame_parallel(self, 
+                              frame_data: dict) -> Tuple[int, str]:
+        """Process a single frame in parallel. Returns (frame_idx, output_path)."""
+        try:
+            frame_idx = frame_data['frame_idx']
+            mask = frame_data['mask']
+            visible_reference_tracks = frame_data['visible_reference_tracks']
+            visible_current_tracks = frame_data['visible_current_tracks']
+            valid_trackers = frame_data['valid_trackers']
+            interpolation_method = frame_data['interpolation_method']
+            frame_offset = frame_data['frame_offset']
+            output_dir = frame_data['output_dir']
+            output_file_path = frame_data['output_file_path']
+            timestamp = frame_data['timestamp']
+            reference_frame = frame_data['reference_frame']
+            
+            # Generate STMap for this frame
+            stmap = self._generate_enhanced_frame_stmap(
+                mask, 
+                visible_reference_tracks, 
+                visible_current_tracks,
+                valid_trackers,
+                interpolation_method
+            )
+            
+            # Save as RGBA EXR
+            actual_frame_number = frame_idx + frame_offset
+            if output_file_path and "%04d" in output_file_path:
+                filename = Path(output_file_path).name % actual_frame_number
+            else:
+                filename = f"CoTracker_{timestamp}_stmap.{actual_frame_number:04d}.exr"
+            frame_path = output_dir / filename
+            
+            # Create metadata
+            frame_metadata = {
+                'referenceFrame': str(reference_frame + frame_offset)
+            }
+            
+            # Save EXR file
+            self._save_enhanced_exr(stmap, frame_path, 32, frame_metadata)
+            
+            return frame_idx, str(frame_path)
+            
+        except Exception as e:
+            self.logger.error(f"Error processing frame {frame_data.get('frame_idx', 'unknown')}: {e}")
+            raise
     
     def generate_stmap_sequence(self, 
                               tracks: torch.Tensor, 
@@ -236,6 +357,9 @@ class STMapExporter:
             if output_file_path is None or output_file_path.strip() == "":
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 output_file_path = f"outputs/CoTracker_{timestamp}_stmap/CoTracker_{timestamp}_stmap.%04d.exr"
+            else:
+                # Generate timestamp for filename fallback
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
             # Extract directory from file path pattern
             output_dir = Path(output_file_path).parent
@@ -244,64 +368,97 @@ class STMapExporter:
             total_frames = end_idx - start_idx + 1
             processed_frames = 0
             
-            # Generate enhanced STMap for each frame
-            self.logger.info(f"Processing tracking frames {start_idx} to {end_idx} (total: {total_frames} frames)")
+            # Get system resources for parallel processing optimization
+            self.logger.info("Analyzing system resources for parallel processing...")
+            system_resources = self._get_system_resources()
+            self.logger.info(f"System resources: {system_resources['cpu_count']} CPUs, "
+                           f"{system_resources['available_memory_gb']:.1f}GB available memory, "
+                           f"{system_resources['memory_percent']:.1f}% memory used")
+            
+            # Analyze single frame performance for optimization
+            self.logger.info("Analyzing single frame performance...")
+            test_frame_idx = start_idx
+            current_tracks = tracks_np[test_frame_idx]
+            current_visibility = visibility_np[test_frame_idx]
+            visible_current_tracks = current_tracks[visible_mask]
+            current_visibility_values = current_visibility[visible_mask]
+            valid_trackers = current_visibility_values > 0.5
+            
+            single_frame_analysis = self._analyze_single_frame_performance(
+                mask, visible_reference_tracks, visible_current_tracks, valid_trackers, interpolation_method
+            )
+            
+            # Calculate optimal parallelization
+            parallelization_info = self._calculate_optimal_parallelization(
+                total_frames, single_frame_analysis, system_resources
+            )
+            
+            self.logger.info(f"Performance analysis: {single_frame_analysis['processing_time']:.2f}s per frame, "
+                           f"{single_frame_analysis['memory_used_mb']:.1f}MB memory per frame")
+            self.logger.info(f"Optimal parallelization: {parallelization_info['optimal_workers']} workers "
+                           f"(memory-limited: {parallelization_info['memory_limited_workers']}, "
+                           f"CPU-limited: {parallelization_info['cpu_limited_workers']})")
+            self.logger.info(f"Estimated total memory usage: {parallelization_info['estimated_total_memory_gb']:.1f}GB")
+            self.logger.info(f"Estimated processing time: {parallelization_info['estimated_processing_time']:.1f}s")
+            
+            # Prepare frame data for parallel processing
+            frame_data_list = []
             for frame_idx in range(start_idx, end_idx + 1):
-                # Calculate progress for callback
-                current_frame_number = frame_idx + frame_offset
-                progress_frame = frame_idx - start_idx + 1
-                
-                if frame_idx % 10 == 0:  # Log every 10 frames
-                    self.logger.info(f"Processing enhanced STMap frame {progress_frame}/{total_frames} (frame {current_frame_number})")
-                
-                # Update progress callback
-                if progress_callback:
-                    progress_callback(progress_frame, total_frames)
-                
-                # Process ALL frames through the enhanced algorithm (including reference frame)
-                # This allows proper debugging and ensures the algorithm works correctly
                 current_tracks = tracks_np[frame_idx]
                 current_visibility = visibility_np[frame_idx]
-                
-                # Filter visible current trackers (same indices as reference)
                 visible_current_tracks = current_tracks[visible_mask]
                 current_visibility_values = current_visibility[visible_mask]
                 valid_trackers = current_visibility_values > 0.5
                 
-                if not np.any(valid_trackers):
-                    # If no valid trackers, create identity STMap with original mask
-                    stmap = self._generate_identity_stmap_with_mask(mask)
-                else:
-                    # Generate enhanced STMap with intelligent interpolation
-                    # This will naturally produce identity at reference frame due to algorithm design
-                    stmap = self._generate_enhanced_frame_stmap(
-                        mask, 
-                        visible_reference_tracks, 
-                        visible_current_tracks,
-                        valid_trackers,
-                        interpolation_method
-                    )
-                
-                # Save as RGBA EXR
-                actual_frame_number = frame_idx + frame_offset
-                # Use the provided filename pattern or generate default
-                if output_file_path and "%04d" in output_file_path:
-                    filename = Path(output_file_path).name % actual_frame_number
-                else:
-                    filename = f"CoTracker_{timestamp}_stmap.{actual_frame_number:04d}.exr"
-                frame_path = output_dir / filename
-                
-                self.logger.debug(f"Saving enhanced STMap frame {actual_frame_number} to {frame_path}")
-                
-                # Create simple metadata with just referenceFrame for now
-                frame_metadata = {
-                    'referenceFrame': str(self.reference_frame + frame_offset)
+                frame_data = {
+                    'frame_idx': frame_idx,
+                    'mask': mask,
+                    'visible_reference_tracks': visible_reference_tracks,
+                    'visible_current_tracks': visible_current_tracks,
+                    'valid_trackers': valid_trackers,
+                    'interpolation_method': interpolation_method,
+                    'frame_offset': frame_offset,
+                    'output_dir': output_dir,
+                    'output_file_path': output_file_path,
+                    'timestamp': timestamp,
+                    'reference_frame': self.reference_frame
+                }
+                frame_data_list.append(frame_data)
+            
+            # Process frames in parallel
+            self.logger.info(f"Processing {total_frames} frames with {parallelization_info['optimal_workers']} parallel workers...")
+            start_time = time.time()
+            
+            with ThreadPoolExecutor(max_workers=parallelization_info['optimal_workers']) as executor:
+                # Submit all frame processing tasks
+                future_to_frame = {
+                    executor.submit(self._process_frame_parallel, frame_data): frame_data['frame_idx'] 
+                    for frame_data in frame_data_list
                 }
                 
-                self._save_enhanced_exr(stmap, frame_path, bit_depth, frame_metadata)
-                
-                # Frame processing complete
-                processed_frames += 1
+                # Process completed frames and update progress
+                for future in future_to_frame:
+                    try:
+                        frame_idx, output_path = future.result()
+                        processed_frames += 1
+                        
+                        # Update progress callback
+                        if progress_callback:
+                            progress_callback(processed_frames, total_frames)
+                        
+                        if processed_frames % 10 == 0:  # Log every 10 frames
+                            current_frame_number = frame_idx + frame_offset
+                            self.logger.info(f"Completed {processed_frames}/{total_frames} frames (frame {current_frame_number})")
+                            
+                    except Exception as e:
+                        frame_idx = future_to_frame[future]
+                        self.logger.error(f"Error processing frame {frame_idx}: {e}")
+                        raise
+            
+            end_time = time.time()
+            total_processing_time = end_time - start_time
+            self.logger.info(f"Parallel processing completed in {total_processing_time:.1f}s "
+                           f"({total_frames/total_processing_time:.1f} frames/second)")
             
             # Count generated files
             exr_files = list(output_dir.glob("*.exr"))

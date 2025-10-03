@@ -12,7 +12,7 @@
 - [x] **Clear VRAM after CoTracker video processing** - Implement proper GPU memory cleanup after tracking to prevent VRAM accumulation and potential out-of-memory issues
 
 ### 🚀 Future Enhancements (Optional)
-- [ ] **STMap Performance Optimization** - Make STMap processing and EXR exports faster by executing frames in parallel:
+- [x] **STMap Performance Optimization** - Make STMap processing and EXR exports faster by executing frames in parallel:
   - Test first frame export and measure CPU/RAM performance
   - Extend parallel processing to available CPUs without exceeding available RAM
   - Consider pushing calculations to GPU if still slow
@@ -52,6 +52,13 @@
 ## Completed Tasks ✅
 
 ### Latest Updates (October 3, 2025)
+- [x] **Parallel STMap Processing** - Implemented intelligent parallel processing with resource monitoring:
+  - Single frame performance analysis to measure CPU/RAM usage per frame
+  - System resource detection (CPU count, available memory, current usage)
+  - Optimal worker calculation using up to 80% of available resources
+  - ThreadPoolExecutor-based parallel frame processing with progress tracking
+  - Performance logging with frames/second and total processing time
+- [x] **Resource Monitoring Integration** - Added psutil dependency for system resource monitoring
 - [x] **VRAM Clearing Implementation** - Automatic GPU memory cleanup after CoTracker processing to prevent memory accumulation
 - [x] **Manual VRAM Clear Button** - Added "🧹 Clear VRAM" button to Gradio UI for manual memory management
 - [x] **VRAM Memory Monitoring** - Added memory usage logging to track allocated and cached GPU memory

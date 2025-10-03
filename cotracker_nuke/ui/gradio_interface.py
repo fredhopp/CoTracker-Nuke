@@ -37,6 +37,7 @@ class GradioInterface:
         self.last_exported_path = None  # Store last exported .nk file path
         self.last_stmap_path = None  # Store last exported STMap directory path
         self.stmap_output_path = None  # Store STMap output file path
+        self.last_enhanced_stmap_path = None  # Store last exported enhanced STMap directory path
         self.last_animated_mask_path = None  # Store last exported animated mask directory path
     
     def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict, dict, dict]:
@@ -914,6 +915,73 @@ class GradioInterface:
             self.logger.error(f"Error warping mask: {e}")
             return mask  # Return original mask if warping fails
     
+    def export_enhanced_stmap_sequence(self, 
+                                     interpolation_method: str,
+                                     bit_depth: int,
+                                     frame_start: int,
+                                     frame_end: Optional[int],
+                                     image_sequence_start_frame: int = 1001) -> str:
+        """Export enhanced STMap sequence with mask-aware intelligent interpolation."""
+        try:
+            self.logger.info(f"Starting enhanced STMap export with parameters: interpolation={interpolation_method}, bit_depth={bit_depth}, frame_start={frame_start}, frame_end={frame_end}, offset={image_sequence_start_frame}")
+            
+            if self.app.tracking_results is None:
+                self.logger.warning("No tracking data available")
+                return "❌ No tracking data available. Please process video first."
+            
+            if self.app.mask_handler.current_mask is None:
+                self.logger.warning("No mask available")
+                return "❌ No mask available. Please draw a mask first."
+            
+            self.logger.info("Tracking data and mask found, proceeding with enhanced STMap export...")
+            
+            # Get tracking data and mask
+            tracks, visibility = self.app.tracking_results
+            mask = self.app.mask_handler.current_mask
+            
+            # Create STMap exporter
+            stmap_exporter = STMapExporter(
+                debug_dir=Path("outputs"),
+                logger=self.logger
+            )
+            
+            # Set exporter parameters
+            stmap_exporter.set_reference_frame(self.app.reference_frame)
+            if self.app.video_processor.current_video is not None:
+                height, width = self.app.video_processor.current_video.shape[1:3]
+                stmap_exporter.set_video_dimensions(width, height)
+            
+            # Generate enhanced STMap sequence
+            output_dir = stmap_exporter.generate_enhanced_stmap_sequence(
+                tracks=tracks,
+                visibility=visibility,
+                mask=mask,
+                interpolation_method=interpolation_method,
+                bit_depth=bit_depth,
+                frame_start=frame_start,
+                frame_end=frame_end,
+                frame_offset=image_sequence_start_frame,
+                progress_callback=None  # Could add progress callback here if needed
+            )
+            
+            # Store the exported path
+            self.last_enhanced_stmap_path = str(Path(output_dir).resolve())
+            
+            # Count generated files
+            output_path = Path(output_dir)
+            exr_files = list(output_path.glob("*.exr"))
+            
+            return (f"✅ Enhanced STMap sequence generated!\n"
+                   f"📁 Directory: {self.last_enhanced_stmap_path}\n"
+                   f"📹 Frames: {len(exr_files)} RGBA EXR files\n"
+                   f"🎬 Reference frame: {self.app.reference_frame + image_sequence_start_frame}\n"
+                   f"🎯 Features: Mask-aware interpolation, RGBA output, intelligent coordinate mapping")
+                   
+        except Exception as e:
+            error_msg = f"❌ Enhanced STMap export failed: {str(e)}"
+            self.logger.error(error_msg)
+            return error_msg
+    
     def copy_stmap_path(self) -> str:
         """Copy the last exported STMap directory path to clipboard."""
         if self.last_stmap_path is None:
@@ -1186,6 +1254,25 @@ class GradioInterface:
                 lines=2
             )
             
+            # === ENHANCED STMAP EXPORT ===
+            gr.Markdown("## 🚀 Enhanced STMap Export (Mask-Aware)")
+            gr.Markdown("""
+            Generate mask-aware STMap with intelligent interpolation and RGBA output.
+            Combines STMap coordinates with animated mask in a single EXR sequence.
+            """)
+            
+            enhanced_stmap_export_btn = gr.Button(
+                "🚀 Generate Enhanced STMap Sequence",
+                variant="primary",
+                size="lg"
+            )
+            
+            enhanced_stmap_export_status = gr.Textbox(
+                label="📋 Enhanced STMap Export Status",
+                interactive=False,
+                lines=4
+            )
+            
             # === ANIMATED MASK EXPORT ===
             gr.Markdown("## 🎭 Animated Mask Export")
             gr.Markdown("""
@@ -1317,6 +1404,12 @@ class GradioInterface:
             stmap_copy_path_btn.click(
                 fn=self.copy_stmap_path,
                 outputs=[stmap_copy_status]
+            )
+            
+            enhanced_stmap_export_btn.click(
+                fn=self.export_enhanced_stmap_sequence,
+                inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame],
+                outputs=[enhanced_stmap_export_status]
             )
             
             animated_mask_export_btn.click(

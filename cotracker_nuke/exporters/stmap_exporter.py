@@ -967,8 +967,8 @@ class STMapExporter:
             # Note: We warp the original mask, not the resized one, to avoid double-masking
             warped_mask = self._warp_mask_with_segment_algorithm(mask, reference_tracks, current_tracks)
             
-            # 2. Calculate smart processing bounds
-            min_x, min_y, max_x, max_y = self._calculate_processing_bounds(mask, reference_tracks)
+            # 2. Calculate smart processing bounds using current frame trackers
+            min_x, min_y, max_x, max_y = self._calculate_processing_bounds(mask, current_tracks)
             
             # 3. Create coordinate grids only for the bounding box area
             y_coords, x_coords = np.mgrid[min_y:max_y+1, min_x:max_x+1]
@@ -1142,14 +1142,15 @@ class STMapExporter:
             closest_indices = np.argmin(distances, axis=0)
             return reference_tracks[closest_indices]
 
-    def _calculate_processing_bounds(self, mask: np.ndarray, reference_tracks: np.ndarray, padding_factor: float = 0.1) -> tuple:
+    def _calculate_processing_bounds(self, mask: np.ndarray, current_tracks: np.ndarray, padding_factor: float = 0.25) -> tuple:
         """
-        Calculate smart bounding box for processing optimization.
+        Calculate smart bounding box based on current frame tracker hull with generous padding.
+        Avoids circular dependency with mask warping by not using mask bounds.
         
         Args:
-            mask: Original mask array (H, W)
-            reference_tracks: Reference frame tracker positions (N, 2)
-            padding_factor: Safety padding as fraction of bbox size (default 0.1 = 10%)
+            mask: Original mask array (H, W) - not used for bounds calculation
+            current_tracks: Current frame tracker positions (N, 2)
+            padding_factor: Safety padding as fraction of bbox size (default 0.25 = 25%)
             
         Returns:
             Tuple of (min_x, min_y, max_x, max_y) for processing bounds
@@ -1157,50 +1158,35 @@ class STMapExporter:
         try:
             height, width = mask.shape
             
-            # 1. Get mask bounding box
-            mask_coords = np.where(mask > 0)
-            if len(mask_coords[0]) == 0:
-                # Empty mask - return full image bounds
-                return (0, 0, width-1, height-1)
-            
-            mask_min_y, mask_max_y = np.min(mask_coords[0]), np.max(mask_coords[0])
-            mask_min_x, mask_max_x = np.min(mask_coords[1]), np.max(mask_coords[1])
-            
-            # 2. Get tracker hull bounding box
-            if len(reference_tracks) < 3:
+            # 1. Get tracker hull bounding box (ignore mask to avoid circular dependency)
+            if len(current_tracks) < 3:
                 # Not enough trackers for hull - use tracker bounds
-                track_min_x, track_max_x = np.min(reference_tracks[:, 0]), np.max(reference_tracks[:, 0])
-                track_min_y, track_max_y = np.min(reference_tracks[:, 1]), np.max(reference_tracks[:, 1])
+                track_min_x, track_max_x = np.min(current_tracks[:, 0]), np.max(current_tracks[:, 0])
+                track_min_y, track_max_y = np.min(current_tracks[:, 1]), np.max(current_tracks[:, 1])
             else:
                 # Calculate convex hull of trackers
                 from scipy.spatial import ConvexHull
                 try:
-                    hull = ConvexHull(reference_tracks)
-                    hull_points = reference_tracks[hull.vertices]
+                    hull = ConvexHull(current_tracks)
+                    hull_points = current_tracks[hull.vertices]
                     track_min_x, track_max_x = np.min(hull_points[:, 0]), np.max(hull_points[:, 0])
                     track_min_y, track_max_y = np.min(hull_points[:, 1]), np.max(hull_points[:, 1])
                 except:
                     # Fallback to tracker bounds if hull fails
-                    track_min_x, track_max_x = np.min(reference_tracks[:, 0]), np.max(reference_tracks[:, 0])
-                    track_min_y, track_max_y = np.min(reference_tracks[:, 1]), np.max(reference_tracks[:, 1])
+                    track_min_x, track_max_x = np.min(current_tracks[:, 0]), np.max(current_tracks[:, 0])
+                    track_min_y, track_max_y = np.min(current_tracks[:, 1]), np.max(current_tracks[:, 1])
             
-            # 3. Combine bounds (union of mask and tracker hull)
-            combined_min_x = min(mask_min_x, track_min_x)
-            combined_max_x = max(mask_max_x, track_max_x)
-            combined_min_y = min(mask_min_y, track_min_y)
-            combined_max_y = max(mask_max_y, track_max_y)
-            
-            # 4. Add safety padding
-            bbox_width = combined_max_x - combined_min_x
-            bbox_height = combined_max_y - combined_min_y
+            # 2. Add generous padding (25% instead of 10%) to account for mask warping
+            bbox_width = track_max_x - track_min_x
+            bbox_height = track_max_y - track_min_y
             padding_x = max(1, int(bbox_width * padding_factor))
             padding_y = max(1, int(bbox_height * padding_factor))
             
-            # 5. Clamp to image bounds
-            min_x = max(0, int(combined_min_x - padding_x))
-            max_x = min(width-1, int(combined_max_x + padding_x))
-            min_y = max(0, int(combined_min_y - padding_y))
-            max_y = min(height-1, int(combined_max_y + padding_y))
+            # 3. Clamp to image bounds
+            min_x = max(0, int(track_min_x - padding_x))
+            max_x = min(width-1, int(track_max_x + padding_x))
+            min_y = max(0, int(track_min_y - padding_y))
+            max_y = min(height-1, int(track_max_y + padding_y))
             
             self.logger.debug(f"Processing bounds: ({min_x}, {min_y}) to ({max_x}, {max_y}) - area: {(max_x-min_x+1)*(max_y-min_y+1)} pixels")
             
@@ -1258,8 +1244,8 @@ class STMapExporter:
             height, width = mask.shape
             warped_mask = np.zeros_like(mask)
             
-            # Calculate smart processing bounds
-            min_x, min_y, max_x, max_y = self._calculate_processing_bounds(mask, reference_tracks)
+            # Calculate smart processing bounds using current frame trackers
+            min_x, min_y, max_x, max_y = self._calculate_processing_bounds(mask, current_tracks)
             
             # Create coordinate grids only for the bounding box area
             y_coords, x_coords = np.mgrid[min_y:max_y+1, min_x:max_x+1]

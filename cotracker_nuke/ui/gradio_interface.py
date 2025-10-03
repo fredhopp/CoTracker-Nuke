@@ -223,7 +223,11 @@ class GradioInterface:
         
         # Replace %refFrame% with actual reference frame
         if reference_frame is not None:
+            self.logger.info(f"Replacing %refFrame% with {reference_frame} in path: {path_template}")
             processed_path = processed_path.replace("%refFrame%", str(reference_frame))
+            self.logger.info(f"Result: {processed_path}")
+        else:
+            self.logger.warning(f"No reference frame provided for path processing: {path_template}")
         
         return processed_path
     
@@ -292,20 +296,17 @@ class GradioInterface:
             root.withdraw()
             root.wm_attributes('-topmost', 1)  # Keep dialog on top
             
-            # Get current output path directory
-            current_path = self.get_default_stmap_output_path()
-            current_dir = os.path.dirname(os.path.abspath(current_path))
+            # Start in the outputs folder (don't create any specific folder structure)
+            outputs_dir = os.path.abspath("outputs")
+            os.makedirs(outputs_dir, exist_ok=True)
             
-            # Ensure output directory exists
-            os.makedirs(current_dir, exist_ok=True)
-            
-            # Open file dialog
+            # Open file dialog - let user pick any location and filename
             file_path = filedialog.asksaveasfilename(
                 title="Save STMap sequence as...",
-                initialdir=current_dir,
+                initialdir=outputs_dir,
                 defaultextension=".exr",
                 filetypes=[("EXR files", "*.exr"), ("All files", "*.*")],
-                initialfile=os.path.basename(current_path)
+                initialfile="CoTracker_stmap_ref%refFrame%.%04d.exr"  # Suggest filename with variables
             )
             
             # Clean up the root window
@@ -335,59 +336,6 @@ class GradioInterface:
             self.logger.error(traceback.format_exc())
             return self.get_default_stmap_output_path()
     
-    def browse_stmap_output_folder(self) -> str:
-        """Open file dialog to browse for STMap output location."""
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-            
-            # Create a root window and hide it
-            root = tk.Tk()
-            root.withdraw()
-            root.wm_attributes('-topmost', 1)  # Keep dialog on top
-            
-            # Get current output path directory
-            current_path = self.get_default_stmap_output_path()
-            current_dir = os.path.dirname(os.path.abspath(current_path))
-            
-            # Ensure output directory exists
-            os.makedirs(current_dir, exist_ok=True)
-            
-            # Open file dialog
-            file_path = filedialog.asksaveasfilename(
-                title="Save STMap sequence as...",
-                initialdir=current_dir,
-                defaultextension=".exr",
-                filetypes=[("EXR files", "*.exr"), ("All files", "*.*")],
-                initialfile=os.path.basename(current_path)
-            )
-            
-            # Clean up the root window
-            root.destroy()
-            
-            if file_path:
-                # Convert to forward slashes and return relative path if possible
-                file_path = file_path.replace('\\', '/')
-                try:
-                    # Try to make it relative to current working directory
-                    rel_path = os.path.relpath(file_path)
-                    return rel_path.replace('\\', '/')
-                except ValueError:
-                    # If relative path fails, return absolute path
-                    return file_path
-            else:
-                # User cancelled, return current path
-                self.logger.info("STMap file dialog cancelled by user")
-                return self.get_default_stmap_output_path()
-                
-        except ImportError:
-            self.logger.warning("tkinter not available for file dialog, using default path")
-            return self.get_default_stmap_output_path()
-        except Exception as e:
-            self.logger.error(f"Error in Enhanced STMap file browser: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            return self.get_default_stmap_output_path()
     
     def update_stmap_frame_defaults(self, reference_video, image_sequence_start_frame) -> Tuple[dict, dict]:
         """Update STMap frame defaults based on video and image sequence start frame."""
@@ -933,8 +881,11 @@ class GradioInterface:
                 output_file_path = self.get_default_stmap_output_path()
             
             # Process dynamic variables in the path
+            # Use the same reference frame calculation as the default path
             reference_frame = self.app.reference_frame + image_sequence_start_frame
+            self.logger.info(f"Processing path variables: reference_frame={reference_frame}, original_path={output_file_path}")
             output_file_path = self.process_path_variables(output_file_path, reference_frame)
+            self.logger.info(f"Processed path: {output_file_path}")
             
             # Create progress callback function with ETA
             import time

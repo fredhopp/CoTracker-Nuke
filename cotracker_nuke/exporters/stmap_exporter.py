@@ -144,10 +144,9 @@ class STMapExporter:
             frame_filename = filename_pattern % actual_frame_number
             frame_path = output_dir / frame_filename
             
-            # Create metadata for this frame using standard OpenEXR keys
+            # Create simple metadata with just referenceFrame for now
             frame_metadata = {
-                'software': 'CoTracker Nuke Integration',
-                'comment': f'ReferenceFrame:{self.reference_frame + frame_offset} CurrentFrame:{actual_frame_number} Interpolation:{interpolation_method} BitDepth:{bit_depth}-bit Points:{tracks_np.shape[1]}'
+                'referenceFrame': str(self.reference_frame + frame_offset)
             }
             
             self._save_exr(stmap, frame_path, bit_depth, frame_metadata)
@@ -248,8 +247,16 @@ class STMapExporter:
             # Generate enhanced STMap for each frame
             self.logger.info(f"Processing tracking frames {start_idx} to {end_idx} (total: {total_frames} frames)")
             for frame_idx in range(start_idx, end_idx + 1):
+                # Calculate progress for callback
+                current_frame_number = frame_idx + frame_offset
+                progress_frame = frame_idx - start_idx + 1
+                
                 if frame_idx % 10 == 0:  # Log every 10 frames
-                    self.logger.info(f"Processing enhanced STMap frame {frame_idx}/{end_idx}")
+                    self.logger.info(f"Processing enhanced STMap frame {progress_frame}/{total_frames} (frame {current_frame_number})")
+                
+                # Update progress callback
+                if progress_callback:
+                    progress_callback(progress_frame, total_frames)
                 
                 # Process ALL frames through the enhanced algorithm (including reference frame)
                 # This allows proper debugging and ensures the algorithm works correctly
@@ -286,18 +293,15 @@ class STMapExporter:
                 
                 self.logger.debug(f"Saving enhanced STMap frame {actual_frame_number} to {frame_path}")
                 
-                # Create metadata
+                # Create simple metadata with just referenceFrame for now
                 frame_metadata = {
-                    'software': 'CoTracker Nuke Integration',
-                    'comment': f'EnhancedSTMap ReferenceFrame:{self.reference_frame + frame_offset} CurrentFrame:{actual_frame_number} Interpolation:{interpolation_method} BitDepth:{bit_depth}-bit Points:{len(visible_reference_tracks)} MaskAware:True'
+                    'referenceFrame': str(self.reference_frame + frame_offset)
                 }
                 
                 self._save_enhanced_exr(stmap, frame_path, bit_depth, frame_metadata)
                 
-                # Update progress
+                # Frame processing complete
                 processed_frames += 1
-                if progress_callback:
-                    progress_callback(processed_frames, total_frames)
             
             # Count generated files
             exr_files = list(output_dir.glob("*.exr"))
@@ -510,6 +514,7 @@ class STMapExporter:
         Convert STMap coordinates to Nuke coordinate system.
         
         CoTracker uses top-left origin (0,0), Nuke uses bottom-left origin.
+        Nuke's STMap node expects pixel-corner coordinates, so we add 0.5 pixel offset.
         
         Args:
             stmap: STMap array (H, W, 2) with coordinates
@@ -521,6 +526,10 @@ class STMapExporter:
             # Normalize coordinates to 0-1 range
             stmap[:, :, 0] = stmap[:, :, 0] / width   # X coordinate (S)
             stmap[:, :, 1] = stmap[:, :, 1] / height  # Y coordinate (T)
+        
+        # Add 0.5 pixel offset for Nuke's STMap node (pixel-corner vs pixel-center)
+        stmap[:, :, 0] = stmap[:, :, 0] + 0.5 / width   # X coordinate offset
+        stmap[:, :, 1] = stmap[:, :, 1] + 0.5 / height  # Y coordinate offset
         
         # Convert Y coordinate from top-left to bottom-left origin
         stmap[:, :, 1] = 1.0 - stmap[:, :, 1]
@@ -562,7 +571,14 @@ class STMapExporter:
             'B': Imath.Channel(pixel_type)
         }
         
-        # Add metadata if provided
+        # Add standard OpenEXR attributes
+        header['pixelAspectRatio'] = 1.0
+        header['screenWindowCenter'] = Imath.V2f(0.0, 0.0)
+        header['screenWindowWidth'] = 1.0
+        header['lineOrder'] = OpenEXR.INCREASING_Y
+        header['compression'] = OpenEXR.ZIP_COMPRESSION
+        
+        # Add custom metadata if provided
         if metadata:
             for key, value in metadata.items():
                 # Use proper OpenEXR metadata format
@@ -1110,7 +1126,14 @@ class STMapExporter:
             'A': Imath.Channel(pixel_type)
         }
         
-        # Add metadata
+        # Add standard OpenEXR attributes
+        header['pixelAspectRatio'] = 1.0
+        header['screenWindowCenter'] = Imath.V2f(0.0, 0.0)
+        header['screenWindowWidth'] = 1.0
+        header['lineOrder'] = OpenEXR.INCREASING_Y
+        header['compression'] = OpenEXR.ZIP_COMPRESSION
+        
+        # Add custom metadata
         if metadata:
             for key, value in metadata.items():
                 header[key] = str(value)

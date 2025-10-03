@@ -1,10 +1,10 @@
 # CoTracker Nuke App - TODO List
 
 ## Status Overview
-- **Current Status**: ✅ Production ready with modular architecture
-- **Recent Major Fixes**: ✅ Coordinate transformation, clipboard functionality, UI improvements
+- **Current Status**: ✅ Production ready with full STMap generation capabilities
+- **Recent Major Features**: ✅ Complete STMap generation with progress tracking, metadata, and RGBA mask conversion
 - **Architecture**: ✅ Fully modular structure with clean separation of concerns
-- **Current Priority**: Feature complete - ready for production use
+- **Current Priority**: Feature complete - ready for production use with advanced STMap functionality
 
 ## Current Tasks
 
@@ -18,6 +18,14 @@
 - [ ] **Build Testing** - Test Rocky Linux build process and verify executable works on target system
 - [x] **Grid Point Spacing** - Check if the grid of points is taking the ratio of image as a parameter to have checkerboard like spacing
 - [ ] **Frame Rate Handling** - Check if the video is working at a set 24fps or properly considering 23.976 fps
+- [ ] **STMap Advanced Interpolation** - Implement memory-efficient bicubic interpolation for STMap generation (Delaunay removed due to memory issues)
+- [x] **STMap Frame Range Integration** - Start and end frame need to take the Image Sequence Start Frame into account. The parameter should default to first and last frame
+- [x] **STMap Output Path Handling** - The output path for EXR needs to be absolute in the status and clipboard
+- [x] **STMap Filename Convention** - The EXR filename needs to conform to our convention: the user needs to be able to pick a path the same way he does for the .nk file. It should default to CoTracker_date_time.%04d.exr ("." not "_" as a separator)
+- [x] **STMap Black Output Fix** - The exported EXR files are black (investigate coordinate mapping issue)
+- [x] **STMap Reference Frame Fix** - STMap now uses the actual user-selected reference frame instead of hardcoded frame 0
+- [x] **STMap UI Layout Optimization** - Condensed UI layout to use less vertical space
+- [x] **STMap Output Folder Structure** - Updated to use nested folder structure: outputs/CoTracker_date_time_stmap/
 
 
 ### 🔧 Maintenance Tasks
@@ -28,7 +36,16 @@
 
 ## Completed Tasks ✅
 
-### Latest Updates (September 30, 2025)
+### Latest Updates (October 2, 2025)
+- [x] **STMap Generation System** - Complete STMap generation with proper coordinate mapping and RGB channel output
+- [x] **STMap Progress Tracking** - Real-time progress bar in Gradio UI showing frame processing status
+- [x] **STMap Metadata Integration** - EXR files include embedded metadata with export parameters
+- [x] **STMap RGBA Mask Conversion** - Automatic conversion of monochromatic masks to RGBA format
+- [x] **STMap Reference Frame Integration** - Proper reference frame handling with frame offset support
+- [x] **STMap Filename Convention** - Reference frame included in copied mask filenames with absolute paths
+- [x] **STMap UI Optimization** - Condensed layout and intelligent frame range defaults
+
+### Previous Updates (September 30, 2025)
 - [x] **Coordinate System Fix** - Fixed Y coordinate offset issue by using actual video height instead of hardcoded 1080p
 - [x] **Clipboard Functionality** - Added robust clipboard support with Windows 11 compatibility and multiple fallback methods
 - [x] **UI Improvements** - Enhanced interface with better button layout, naming, and user experience
@@ -71,6 +88,11 @@ cotracker_nuke/
 ```
 
 ### Key Features Implemented
+- **STMap Generation**: Complete animated STMap sequence generation with proper coordinate mapping
+- **Progress Tracking**: Real-time progress bar in Gradio UI with frame-by-frame status updates
+- **EXR Metadata**: Embedded metadata in EXR files with export parameters and software information
+- **RGBA Mask Conversion**: Automatic conversion of monochromatic masks to RGBA format
+- **Reference Frame Integration**: Proper handling of user-selected reference frames with offset support
 - **Coordinate System**: Proper transformation from CoTracker (top-left origin) to Nuke (bottom-left origin)
 - **Clipboard Integration**: Cross-platform clipboard with Windows 11 support and multiple fallback methods
 - **Dynamic Video Height**: Uses actual video dimensions instead of hardcoded values
@@ -86,4 +108,4 @@ cotracker_nuke/
 - Use proper logging and error handling throughout
 
 ---
-*Last Updated: September 30, 2025 - Production Ready with Full Feature Set*
+*Last Updated: October 2, 2025 - Production Ready with Complete STMap Generation System*

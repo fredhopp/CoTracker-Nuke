@@ -19,6 +19,8 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
 - 🎭 **Zone Masking**: Interactive mask drawing to restrict tracking to specific areas
 - 🖼️ **Visual Preview**: Real-time preview of tracked points with frame-by-frame navigation
 - 📤 **Smart Nuke Export**: Generates complete Nuke Tracker4 nodes with proper coordinate transformation
+- 🗺️ **STMap Generation**: Complete animated STMap sequence generation for geometric transformations
+- 📊 **Progress Tracking**: Real-time progress bars for both tracking and STMap generation
 - 📋 **Clipboard Integration**: One-click copy of .nk file paths with Windows 11 support
 - 🗂️ **File Management**: Built-in file browser and automatic output organization
 - 🏗️ **Modular Architecture**: Clean, maintainable codebase with separated concerns
@@ -78,6 +80,13 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
    - Click "📤 Generate Tracker Node as .nk" to create the Nuke file
    - Click "📋 Copy .nk Path to Clipboard" to copy the file path for easy import
 
+7. **🗺️ Generate STMap Sequence** (Optional):
+   - Choose interpolation method (linear or cubic) and bit depth (16-bit or 32-bit)
+   - Set frame range for STMap export (defaults to full sequence)
+   - Click "🗺️ Generate STMap Sequence" to create animated EXR files
+   - View real-time progress bar during generation
+   - Click "📋 Copy STMap Directory Path" to copy the output folder path
+
 ### Importing into Nuke
 
 1. **Open Nuke** and create a new composition
@@ -86,6 +95,12 @@ A powerful application that leverages Facebook Research's CoTracker for point tr
    - Use the copied path: File → Open → Paste (`Ctrl+V`) the file path
    - Or drag and drop the .nk file into Nuke
    - The Tracker4 node will load with all tracking data and proper coordinate transformation
+
+3. **Using STMap sequences** (if generated):
+   - Import the EXR sequence using Read node
+   - Connect to STMap node for geometric transformations
+   - STMap files contain RGB channels: Red=X coordinates, Green=Y coordinates, Blue=black
+   - Reference frame shows perfect gradient, other frames show coordinate mapping
 
 ## How It Works
 
@@ -107,6 +122,18 @@ The generated Nuke script includes:
 - **Reference frame preservation**: Maintains your chosen reference frame
 - **Track visibility data**: Only includes confident tracking points
 
+### STMap Generation
+
+The STMap export system provides:
+- **Animated EXR sequences**: RGB channel format for Nuke compatibility
+- **Perfect reference frame**: Identity gradient (Red=0-1 horizontal, Green=0-1 vertical)
+- **Coordinate mapping**: Each pixel shows where to sample from in the reference frame
+- **Interpolation options**: Linear or cubic interpolation between tracking points
+- **Bit depth support**: 16-bit or 32-bit float precision
+- **Progress tracking**: Real-time progress bar during generation
+- **Metadata embedding**: EXR files include export parameters and software information
+- **RGBA mask conversion**: Automatic conversion of monochromatic masks to RGBA format
+
 ## Technical Details
 
 ### Dependencies
@@ -118,12 +145,14 @@ The generated Nuke script includes:
 - **NumPy/SciPy**: Numerical computations and spatial algorithms
 - **pyperclip**: Cross-platform clipboard functionality
 - **imageio**: Video loading and processing
+- **OpenEXR**: High-precision EXR file format support for STMap generation
 
 ### Supported Formats
 
 - **Input Videos**: MP4, MOV, AVI, MKV
-- **Output**: Nuke script files (.nk)
+- **Output**: Nuke script files (.nk) and EXR sequences for STMap
 - **CoTracker Models**: CoTracker3 (preferred) or CoTracker2 (fallback)
+- **STMap Output**: 16-bit or 32-bit float EXR files with RGB channels
 
 ### Performance
 

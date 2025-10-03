@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from ..core.app import CoTrackerNukeApp
+from ..exporters.stmap_exporter import STMapExporter
 
 
 class GradioInterface:
@@ -33,12 +34,14 @@ class GradioInterface:
         # UI state
         self.preview_video_path = None
         self.last_exported_path = None  # Store last exported .nk file path
+        self.last_stmap_path = None  # Store last exported STMap directory path
+        self.stmap_output_path = None  # Store STMap output file path
     
-    def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict]:
+    def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict, dict, dict]:
         """Load video and return status message + video path for player + slider update."""
         try:
             if reference_video is None:
-                return "❌ No video file selected", None, gr.update()
+                return "❌ No video file selected", None, gr.update(), gr.update(), gr.update()
             
             # Load video
             self.app.load_video(reference_video)
@@ -64,12 +67,16 @@ class GradioInterface:
             
             slider_update = gr.update(minimum=start_offset, maximum=max_frame, value=start_offset)
             
-            return status_msg, reference_video, slider_update
+            # Update STMap frame defaults
+            stmap_start_update = gr.update(value=start_offset)
+            stmap_end_update = gr.update(value=max_frame)
+            
+            return status_msg, reference_video, slider_update, stmap_start_update, stmap_end_update
                    
         except Exception as e:
             error_msg = f"❌ Error loading video: {str(e)}"
             self.logger.error(error_msg)
-            return error_msg, None, gr.update()
+            return error_msg, None, gr.update(), gr.update(), gr.update()
     
     def update_frame_slider_range(self, reference_video, start_frame_offset) -> dict:
         """Update frame slider range when video is loaded."""
@@ -191,6 +198,15 @@ class GradioInterface:
         output_dir.mkdir(exist_ok=True)
         return f"outputs/CoTracker_{timestamp}.nk"
     
+    def get_default_stmap_output_path(self) -> str:
+        """Get default STMap output file path."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Create outputs directory if it doesn't exist
+        output_dir = Path("outputs")
+        output_dir.mkdir(exist_ok=True)
+        return f"outputs/CoTracker_{timestamp}_stmap/CoTracker_{timestamp}_stmap.%04d.exr"
+    
     def browse_output_folder(self) -> str:
         """Open file dialog to browse for output location."""
         try:
@@ -244,6 +260,77 @@ class GradioInterface:
             import traceback
             self.logger.error(traceback.format_exc())
             return self.get_default_output_path()
+    
+    def browse_stmap_output_folder(self) -> str:
+        """Open file dialog to browse for STMap output location."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            # Create a root window and hide it
+            root = tk.Tk()
+            root.withdraw()
+            root.wm_attributes('-topmost', 1)  # Keep dialog on top
+            
+            # Get current output path directory
+            current_path = self.get_default_stmap_output_path()
+            current_dir = os.path.dirname(os.path.abspath(current_path))
+            
+            # Ensure output directory exists
+            os.makedirs(current_dir, exist_ok=True)
+            
+            # Open file dialog
+            file_path = filedialog.asksaveasfilename(
+                title="Save STMap sequence as...",
+                initialdir=current_dir,
+                defaultextension=".exr",
+                filetypes=[("EXR files", "*.exr"), ("All files", "*.*")],
+                initialfile=os.path.basename(current_path)
+            )
+            
+            # Clean up the root window
+            root.destroy()
+            
+            if file_path:
+                # Convert to forward slashes and return relative path if possible
+                file_path = file_path.replace('\\', '/')
+                try:
+                    # Try to make it relative to current working directory
+                    rel_path = os.path.relpath(file_path)
+                    return rel_path.replace('\\', '/')
+                except ValueError:
+                    # If relative path fails, return absolute path
+                    return file_path
+            else:
+                # User cancelled, return current path
+                self.logger.info("STMap file dialog cancelled by user")
+                return self.get_default_stmap_output_path()
+                
+        except ImportError:
+            self.logger.warning("tkinter not available for file dialog, using default path")
+            return self.get_default_stmap_output_path()
+        except Exception as e:
+            self.logger.error(f"Error in STMap file browser: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return self.get_default_stmap_output_path()
+    
+    def update_stmap_frame_defaults(self, reference_video, image_sequence_start_frame) -> Tuple[dict, dict]:
+        """Update STMap frame defaults based on video and image sequence start frame."""
+        try:
+            if reference_video is None or self.app.current_video is None:
+                return gr.update(), gr.update()
+            
+            # Get video info
+            info = self.app.get_video_info()
+            start_frame = image_sequence_start_frame if image_sequence_start_frame is not None else 1001
+            end_frame = start_frame + info['frames'] - 1
+            
+            return gr.update(value=start_frame), gr.update(value=end_frame)
+            
+        except Exception as e:
+            self.logger.error(f"Error updating STMap frame defaults: {e}")
+            return gr.update(), gr.update()
     
     def copy_to_clipboard(self, text: str) -> bool:
         """Copy text to clipboard using multiple fallback methods with Windows 11 fixes."""
@@ -418,6 +505,195 @@ class GradioInterface:
             return f"📋 Copied to clipboard!\n{self.last_exported_path}"
         else:
             return f"⚠️ Could not copy to clipboard.\nPath: {self.last_exported_path}"
+    
+    def export_stmap_sequence(self, 
+                            interpolation_method: str,
+                            bit_depth: int,
+                            frame_start: int,
+                            frame_end: Optional[int],
+                            image_sequence_start_frame: int = 1001,
+                            output_file_path: Optional[str] = None,
+                            progress=gr.Progress()) -> str:
+        """Export tracking data to animated STMap sequence."""
+        try:
+            if self.app.tracking_results is None:
+                return "❌ No tracking data available. Please process video first."
+            
+            # Get tracking data
+            tracks, visibility = self.app.tracking_results
+            
+            # Get video dimensions
+            if self.app.video_processor.current_video is not None:
+                height, width = self.app.video_processor.current_video.shape[1:3]
+            else:
+                return "❌ No video loaded. Please load a video first."
+            
+            # Get mask if available
+            mask = self.app.mask_handler.current_mask
+            
+            # Determine output path
+            if output_file_path is None or output_file_path == "":
+                output_path = self.get_default_stmap_output_path()
+            else:
+                output_path = output_file_path
+            
+            # Extract directory and filename pattern from output path
+            output_dir = Path(output_path).parent
+            filename_pattern = Path(output_path).name
+            
+            # Create STMap exporter
+            stmap_exporter = STMapExporter(
+                debug_dir=output_dir,
+                logger=self.app.logger
+            )
+            
+            # Set parameters
+            stmap_exporter.set_reference_frame(self.app.reference_frame)
+            stmap_exporter.set_video_dimensions(width, height)
+            
+            # Convert frame range to 0-based video frames
+            if frame_start is not None:
+                video_frame_start = max(0, frame_start - image_sequence_start_frame)
+            else:
+                video_frame_start = 0  # Default to first frame
+                
+            if frame_end is not None:
+                video_frame_end = frame_end - image_sequence_start_frame
+            else:
+                # Default to last frame
+                video_frame_end = None
+            
+            # Progress tracking with Gradio
+            def progress_callback(current, total):
+                progress(current / total, desc=f"Processing frame {current}/{total}")
+                self.logger.info(f"Processing frame {current}/{total}")
+            
+            # Generate STMap sequence
+            output_dir = stmap_exporter.generate_stmap_sequence(
+                tracks=tracks,
+                visibility=visibility,
+                mask=mask,
+                interpolation_method=interpolation_method,
+                bit_depth=bit_depth,
+                frame_start=video_frame_start,
+                frame_end=video_frame_end,
+                filename_pattern=filename_pattern,
+                frame_offset=image_sequence_start_frame,
+                progress_callback=progress_callback
+            )
+            
+            # Store the exported path (make it absolute)
+            absolute_output_dir = str(Path(output_dir).resolve())
+            self.last_stmap_path = absolute_output_dir
+            
+            # Copy mask PNG to output folder if available
+            mask_path = None
+            if mask is not None:
+                try:
+                    # Find the most recent mask file in the debug directory
+                    debug_dir = Path(self.app.mask_handler.debug_dir)
+                    mask_files = list(debug_dir.glob("drawn_mask_*.png"))
+                    if mask_files:
+                        # Get the most recent mask file
+                        latest_mask = max(mask_files, key=lambda x: x.stat().st_mtime)
+                        
+                        # Create new filename with reference frame
+                        reference_frame_display = self.app.reference_frame + image_sequence_start_frame
+                        original_name = latest_mask.stem  # Remove .png extension
+                        new_filename = f"{original_name}_{reference_frame_display}.png"
+                        
+                        # Convert mask to RGBA and save to output directory with new name
+                        output_mask_path = Path(output_dir) / new_filename
+                        self._convert_mask_to_rgba(latest_mask, output_mask_path)
+                        
+                        # Make path absolute
+                        mask_path = str(output_mask_path.resolve())
+                        self.logger.info(f"Copied and converted mask to: {mask_path}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to copy mask: {e}")
+            
+            # Get tracking info for summary
+            info = self.app.get_tracking_info()
+            
+            # Count generated files
+            output_path = Path(output_dir)
+            exr_files = list(output_path.glob("*.exr"))
+            
+            # Get reference frame info
+            reference_frame_display = self.app.reference_frame + image_sequence_start_frame
+            
+            status_msg = (f"✅ STMap sequence generated!\n"
+                         f"📁 Directory: {absolute_output_dir}\n"
+                         f"🎯 Points: {info['num_points']}\n"
+                         f"📹 Frames: {len(exr_files)} EXR files\n"
+                         f"🎬 Reference frame: {reference_frame_display}\n"
+                         f"🔧 Interpolation: {interpolation_method}\n"
+                         f"💾 Bit depth: {bit_depth}-bit float\n"
+                         f"🎭 Mask: {'Used' if mask is not None else 'None'}")
+            
+            if mask_path:
+                status_msg += f"\n🎭 Mask copied to: {mask_path}"
+            
+            return status_msg
+                   
+        except Exception as e:
+            error_msg = f"❌ STMap export failed: {str(e)}"
+            self.logger.error(error_msg)
+            return error_msg
+    
+    def _convert_mask_to_rgba(self, input_path: Path, output_path: Path):
+        """
+        Convert monochromatic mask PNG to RGBA format.
+        
+        Args:
+            input_path: Path to input mask file
+            output_path: Path to output RGBA mask file
+        """
+        try:
+            from PIL import Image
+            import numpy as np
+            
+            # Load the mask image
+            mask_image = Image.open(input_path)
+            
+            # Convert to numpy array
+            mask_array = np.array(mask_image)
+            
+            # Handle different input formats
+            if len(mask_array.shape) == 2:  # Grayscale
+                # Convert to RGBA where R=G=B=A=original_value
+                rgba_array = np.stack([mask_array, mask_array, mask_array, mask_array], axis=-1)
+            elif len(mask_array.shape) == 3 and mask_array.shape[2] == 3:  # RGB
+                # Convert to RGBA where A=original_R (assuming grayscale input)
+                alpha = mask_array[:, :, 0]  # Use red channel as alpha
+                rgba_array = np.stack([mask_array[:, :, 0], mask_array[:, :, 1], mask_array[:, :, 2], alpha], axis=-1)
+            elif len(mask_array.shape) == 3 and mask_array.shape[2] == 4:  # Already RGBA
+                rgba_array = mask_array
+            else:
+                raise ValueError(f"Unsupported mask format: {mask_array.shape}")
+            
+            # Create RGBA image and save
+            rgba_image = Image.fromarray(rgba_array.astype(np.uint8), 'RGBA')
+            rgba_image.save(output_path)
+            
+            self.logger.debug(f"Converted mask to RGBA: {input_path} -> {output_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to convert mask to RGBA: {e}")
+            # Fallback: just copy the original file
+            import shutil
+            shutil.copy2(input_path, output_path)
+    
+    def copy_stmap_path(self) -> str:
+        """Copy the last exported STMap directory path to clipboard."""
+        if self.last_stmap_path is None:
+            return "❌ No STMap sequence has been exported yet. Please export STMap first."
+        
+        success = self.copy_to_clipboard(self.last_stmap_path)
+        if success:
+            return f"📋 Copied to clipboard!\n{self.last_stmap_path}"
+        else:
+            return f"⚠️ Could not copy to clipboard.\nPath: {self.last_stmap_path}"
     
     def create_interface(self) -> gr.Blocks:
         """Create and return the Gradio interface."""
@@ -600,11 +876,91 @@ class GradioInterface:
                 lines=2
             )
             
+            # === STEP 7: EXPORT STMAP SEQUENCE ===
+            gr.Markdown("## 🗺️ Step 7: Export STMap Sequence")
+            gr.Markdown("""
+            Generate an animated STMap sequence for geometric transformations in Nuke.
+            STMap uses UV coordinates where pixel values represent source positions for warping.
+            """)
+            
+            with gr.Row():
+                with gr.Column(scale=1):
+                    with gr.Row():
+                        stmap_interpolation = gr.Dropdown(
+                            choices=["linear", "cubic"],
+                            value="linear",
+                            label="🔧 Interpolation",
+                            info="Linear: Fast, Cubic: Smooth",
+                            scale=1
+                        )
+                        
+                        stmap_bit_depth = gr.Dropdown(
+                            choices=[16, 32],
+                            value=32,
+                            label="💾 Bit Depth",
+                            info="32-bit: Max precision, 16-bit: Smaller files",
+                            scale=1
+                        )
+                
+                with gr.Column(scale=1):
+                    with gr.Row():
+                        stmap_frame_start = gr.Number(
+                            value=None,
+                            label="🎬 Start Frame",
+                            scale=1
+                        )
+                        
+                        stmap_frame_end = gr.Number(
+                            value=None,
+                            label="🎬 End Frame",
+                            scale=1
+                        )
+            
+            with gr.Row():
+                stmap_output_file_path = gr.Textbox(
+                    label="📁 STMap Output File Path",
+                    value=self.get_default_stmap_output_path(),
+                    info="Path pattern for EXR sequence (use %04d for frame numbers)",
+                    scale=3
+                )
+                
+                stmap_file_picker_btn = gr.Button(
+                    "📂 Browse",
+                    size="sm",
+                    scale=1
+                )
+            
+            stmap_export_btn = gr.Button(
+                "🗺️ Generate STMap Sequence",
+                variant="primary",
+                size="lg"
+            )
+            
+            stmap_progress = gr.Progress()
+            
+            stmap_export_status = gr.Textbox(
+                label="📋 STMap Export Status",
+                interactive=False,
+                lines=4
+            )
+            
+            stmap_copy_path_btn = gr.Button(
+                "📋 Copy STMap Directory Path",
+                variant="primary",
+                size="lg"
+            )
+            
+            stmap_copy_status = gr.Textbox(
+                label="📋 STMap Copy Status",
+                interactive=False,
+                lines=2
+            )
+            
             # Event handlers
             reference_video.change(
                 fn=self.load_video_for_reference,
                 inputs=[reference_video, image_sequence_start_frame],
-                outputs=[video_status, video_player, frame_slider]
+                outputs=[video_status, video_player, frame_slider, stmap_frame_start, stmap_frame_end]
             )
             
             image_sequence_start_frame.change(
@@ -643,31 +999,28 @@ class GradioInterface:
             
             
             # Simplified mask processing without queue to avoid freezing
-            def process_mask_simple(edited_image):
+            def process_mask_and_update_grid(edited_image, grid_size):
                 try:
                     if edited_image is None:
-                        return "❌ No mask drawn. Please draw a mask on the reference frame."
+                        return "❌ No mask drawn. Please draw a mask on the reference frame.", gr.update()
                     
                     self.logger.info("Processing mask...")
                     message, mask = self.app.process_mask_from_editor(edited_image)
-                    return message
+                    
+                    # Update grid info after mask processing
+                    grid_info = self.calculate_grid_info(grid_size)
+                    
+                    return message, grid_info
                     
                 except Exception as e:
                     error_msg = f"❌ Error: {str(e)}"
                     self.logger.error(error_msg)
-                    return error_msg
+                    return error_msg, gr.update()
             
             use_mask_btn.click(
-                fn=process_mask_simple,
-                inputs=[mask_editor],
-                outputs=[mask_result]
-            )
-            
-            # Update grid info when mask is used
-            use_mask_btn.click(
-                fn=self.calculate_grid_info,
-                inputs=[grid_size],
-                outputs=[vram_warning]
+                fn=process_mask_and_update_grid,
+                inputs=[mask_editor, grid_size],
+                outputs=[mask_result, vram_warning]
             )
             
             file_picker_btn.click(
@@ -684,6 +1037,37 @@ class GradioInterface:
             copy_path_btn.click(
                 fn=self.copy_exported_path,
                 outputs=[copy_status]
+            )
+            
+            # STMap export event handlers
+            stmap_file_picker_btn.click(
+                fn=lambda: gr.update(value=self.browse_stmap_output_folder()),
+                outputs=[stmap_output_file_path]
+            )
+            
+            # Update STMap frame defaults when video loads
+            reference_video.change(
+                fn=self.update_stmap_frame_defaults,
+                inputs=[reference_video, image_sequence_start_frame],
+                outputs=[stmap_frame_start, stmap_frame_end]
+            )
+            
+            # Update STMap frame defaults when image sequence start frame changes
+            image_sequence_start_frame.change(
+                fn=self.update_stmap_frame_defaults,
+                inputs=[reference_video, image_sequence_start_frame],
+                outputs=[stmap_frame_start, stmap_frame_end]
+            )
+            
+            stmap_export_btn.click(
+                fn=self.export_stmap_sequence,
+                inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame, stmap_output_file_path],
+                outputs=[stmap_export_status]
+            )
+            
+            stmap_copy_path_btn.click(
+                fn=self.copy_stmap_path,
+                outputs=[stmap_copy_status]
             )
             
         

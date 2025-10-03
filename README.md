@@ -183,7 +183,7 @@ The advanced STMap export system provides:
 
 ### Common Issues
 
-1. **CUDA Out of Memory**: Reduce grid size or use CPU mode
+1. **CUDA Out of Memory**: Reduce video resolution, use masking to limit tracking area, or use CPU mode
 2. **Video Loading Errors**: Ensure video format is supported and file isn't corrupted
 3. **Model Loading Issues**: Check internet connection for torch.hub downloads
 4. **Coordinate Misalignment**: The app automatically handles coordinate system conversion
@@ -195,7 +195,8 @@ The advanced STMap export system provides:
 - Start with smaller grid sizes (10-20) for testing, scale up as needed
 - Use masking to focus tracking on relevant areas and improve performance
 - Ensure good lighting and contrast in source videos for better tracking accuracy
-- For very large numbers of tracks (100+), consider using masks to limit the tracking area
+- **VRAM Usage**: Memory consumption depends on total pixels to be tracked (video resolution × tracking area), not the number of trackers
+- For high-resolution videos or large tracking areas, consider using masks to limit the processing region
 
 ## License
 

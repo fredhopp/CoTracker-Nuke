@@ -8,6 +8,9 @@
 
 ## Current Tasks
 
+### 🔥 High Priority
+- [x] **Clear VRAM after CoTracker video processing** - Implement proper GPU memory cleanup after tracking to prevent VRAM accumulation and potential out-of-memory issues
+
 ### 🚀 Future Enhancements (Optional)
 - [ ] **STMap Performance Optimization** - Make STMap processing and EXR exports faster by executing frames in parallel:
   - Test first frame export and measure CPU/RAM performance
@@ -49,6 +52,9 @@
 ## Completed Tasks ✅
 
 ### Latest Updates (October 3, 2025)
+- [x] **VRAM Clearing Implementation** - Automatic GPU memory cleanup after CoTracker processing to prevent memory accumulation
+- [x] **Manual VRAM Clear Button** - Added "🧹 Clear VRAM" button to Gradio UI for manual memory management
+- [x] **VRAM Memory Monitoring** - Added memory usage logging to track allocated and cached GPU memory
 - [x] **UI Organization Improvements** - Put browse buttons inside same frame as output paths for better organization
 - [x] **Absolute Path Implementation** - All default output paths (.nk and .exr) now use absolute paths instead of relative
 - [x] **Dynamic Path Variables** - Implemented %refFrame% support for organized output file management

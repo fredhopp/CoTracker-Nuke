@@ -169,6 +169,21 @@ class CoTrackerNukeApp:
         
         return tracks, visibility
     
+    def clear_vram(self) -> str:
+        """
+        Manually clear GPU memory.
+        
+        Returns:
+            Status message about VRAM clearing
+        """
+        try:
+            self.tracker.clear_vram()
+            return "✅ VRAM cleared successfully"
+        except Exception as e:
+            error_msg = f"❌ Failed to clear VRAM: {str(e)}"
+            self.logger.error(error_msg)
+            return error_msg
+    
     def export_to_nuke(self, output_path: str, frame_offset: int = 1001) -> str:
         """
         Export tracking results to Nuke .nk file.

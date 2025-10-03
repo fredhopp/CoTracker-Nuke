@@ -38,7 +38,7 @@ class GradioInterface:
         self.last_stmap_path = None  # Store last exported STMap directory path
         self.stmap_output_path = None  # Store STMap output file path
         self.last_enhanced_stmap_path = None  # Store last exported enhanced STMap directory path
-        self.last_animated_mask_path = None  # Store last exported animated mask directory path
+        # REMOVED: last_animated_mask_path - animated mask is now embedded in STMap alpha channel
     
     def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict, dict, dict]:
         """Load video and return status message + video path for player + slider update."""
@@ -174,6 +174,16 @@ class GradioInterface:
             self.logger.error(error_msg)
             return error_msg, None
     
+    def clear_vram(self) -> str:
+        """Clear GPU memory manually."""
+        try:
+            result = self.app.clear_vram()
+            return result
+        except Exception as e:
+            error_msg = f"❌ Error clearing VRAM: {str(e)}"
+            self.logger.error(error_msg)
+            return error_msg
+    
     def use_mask_from_editor(self, edited_image: Any) -> str:
         """Process and use mask from Gradio ImageEditor (non-blocking)."""
         try:
@@ -199,17 +209,36 @@ class GradioInterface:
         # Create outputs directory if it doesn't exist
         output_dir = Path("outputs")
         output_dir.mkdir(exist_ok=True)
-        return f"outputs/CoTracker_{timestamp}.nk"
+        return str((output_dir / f"CoTracker_{timestamp}.nk").resolve())
     
-    def get_default_stmap_output_path(self) -> str:
-        """Get default STMap output file path."""
+    def get_default_stmap_output_path(self, reference_frame: int = None) -> str:
+        """Get default STMap output file path with dynamic variables."""
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
         # Create outputs directory if it doesn't exist
         output_dir = Path("outputs")
         output_dir.mkdir(exist_ok=True)
-        return f"outputs/CoTracker_{timestamp}_stmap/CoTracker_{timestamp}_stmap.%04d.exr"
+        
+        # Use reference frame if provided, otherwise use placeholder
+        ref_frame_str = str(reference_frame) if reference_frame is not None else "%refFrame%"
+        
+        return str((output_dir / f"CoTracker_{timestamp}_stmap_ref{ref_frame_str}/CoTracker_{timestamp}_stmap_ref{ref_frame_str}.%04d.exr").resolve())
     
+    def get_default_enhanced_stmap_output_path(self, reference_frame: int = None) -> str:
+        """Get default Enhanced STMap output file path with dynamic variables."""
+        # Enhanced STMap uses the same path as regular STMap
+        return self.get_default_stmap_output_path(reference_frame)
+    
+    def process_path_variables(self, path_template: str, reference_frame: int = None) -> str:
+        """Process dynamic variables in path template."""
+        processed_path = path_template
+        
+        # Replace %refFrame% with actual reference frame
+        if reference_frame is not None:
+            processed_path = processed_path.replace("%refFrame%", str(reference_frame))
+        
+        return processed_path
     
     def browse_output_folder(self) -> str:
         """Open file dialog to browse for output location."""
@@ -564,7 +593,8 @@ class GradioInterface:
         else:
             return f"⚠️ Could not copy to clipboard.\nPath: {self.last_exported_path}"
     
-    def export_stmap_sequence(self, 
+    # OLD METHOD REMOVED - Only enhanced STMap export is used now
+    def _removed_export_stmap_sequence(self, 
                             interpolation_method: str,
                             bit_depth: int,
                             frame_start: int,
@@ -594,6 +624,10 @@ class GradioInterface:
                 output_path = self.get_default_stmap_output_path()
             else:
                 output_path = output_file_path
+            
+            # Process dynamic variables in the path
+            reference_frame = self.app.reference_frame
+            output_path = self.process_path_variables(output_path, reference_frame)
             
             # Extract directory and filename pattern from output path
             output_dir = Path(output_path).parent
@@ -742,7 +776,8 @@ class GradioInterface:
             import shutil
             shutil.copy2(input_path, output_path)
     
-    def export_animated_mask_sequence(self, image_sequence_start_frame: int = 1001) -> str:
+    # REMOVED: export_animated_mask_sequence - animated mask is now embedded in STMap alpha channel
+    def _removed_export_animated_mask_sequence(self, image_sequence_start_frame: int = 1001) -> str:
         """Export animated mask sequence that follows tracked points."""
         try:
             self.logger.info(f"Starting animated mask export with start frame: {image_sequence_start_frame}")
@@ -875,7 +910,8 @@ class GradioInterface:
                                      frame_start: int,
                                      frame_end: Optional[int],
                                      image_sequence_start_frame: int = 1001,
-                                     output_file_path: str = None) -> str:
+                                     output_file_path: str = None,
+                                     progress=gr.Progress()) -> str:
         """Export enhanced STMap sequence with mask-aware intelligent interpolation."""
         try:
             self.logger.info(f"Starting enhanced STMap export with parameters: interpolation={interpolation_method}, bit_depth={bit_depth}, frame_start={frame_start}, frame_end={frame_end}, offset={image_sequence_start_frame}")
@@ -910,6 +946,14 @@ class GradioInterface:
             if output_file_path is None or output_file_path.strip() == "":
                 output_file_path = self.get_default_enhanced_stmap_output_path()
             
+            # Process dynamic variables in the path
+            reference_frame = self.app.reference_frame + image_sequence_start_frame
+            output_file_path = self.process_path_variables(output_file_path, reference_frame)
+            
+            # Create progress callback function
+            def progress_callback(current_frame, total_frames):
+                progress(current_frame / total_frames, desc=f"Processing frame {current_frame}/{total_frames}")
+
             # Generate enhanced STMap sequence
             output_dir = stmap_exporter.generate_enhanced_stmap_sequence(
                 tracks=tracks,
@@ -921,7 +965,7 @@ class GradioInterface:
                 frame_end=frame_end,
                 frame_offset=image_sequence_start_frame,
                 output_file_path=output_file_path,
-                progress_callback=None  # Could add progress callback here if needed
+                progress_callback=progress_callback
             )
             
             # Store the exported path
@@ -1090,6 +1134,13 @@ class GradioInterface:
                         variant="primary",
                         size="lg"
                     )
+                    
+                    clear_vram_btn = gr.Button(
+                        "🧹 Clear VRAM",
+                        variant="secondary",
+                        size="lg",
+                        info="Manually clear GPU memory"
+                    )
             
             processing_status = gr.Textbox(
                 label="⚙️ Processing Status",
@@ -1107,18 +1158,19 @@ class GradioInterface:
             # === STEP 6: EXPORT TO NUKE ===
             gr.Markdown("## 📤 Step 6: Export to Nuke")
             
-            with gr.Row():
+            with gr.Group():
+                with gr.Row():
+                    gr.Markdown("**.nk Output File Path**")
+                    file_picker_btn = gr.Button(
+                        "📂 Browse",
+                        size="sm",
+                        scale=1
+                    )
+                
                 output_file_path = gr.Textbox(
-                    label="📁 Output File Path",
                     value=self.get_default_output_path(),
                     info="Path where the .nk file will be saved",
-                    scale=3
-                )
-                
-                file_picker_btn = gr.Button(
-                    "📂 Browse",
-                    size="sm",
-                    scale=1
+                    show_label=False
                 )
             
             export_btn = gr.Button(
@@ -1186,18 +1238,19 @@ class GradioInterface:
                             scale=1
                         )
             
-            with gr.Row():
-                enhanced_stmap_output_file_path = gr.Textbox(
-                    label="📁 STMap Output File Path",
-                    value=self.get_default_stmap_output_path(),
-                    info="Path pattern for RGBA EXR sequence (use %04d for frame numbers)",
-                    scale=3
-                )
+            with gr.Group():
+                with gr.Row():
+                    gr.Markdown("**STMap Output File Path**")
+                    enhanced_stmap_file_picker_btn = gr.Button(
+                        "📂 Browse",
+                        size="sm",
+                        scale=1
+                    )
                 
-                enhanced_stmap_file_picker_btn = gr.Button(
-                    "📂 Browse",
-                    size="sm",
-                    scale=1
+                enhanced_stmap_output_file_path = gr.Textbox(
+                    value=self.get_default_stmap_output_path(),
+                    info="Path pattern for RGBA EXR sequence (use %04d for frame numbers, %refFrame% for reference frame)",
+                    show_label=False
                 )
             
             enhanced_stmap_export_btn = gr.Button(
@@ -1205,6 +1258,8 @@ class GradioInterface:
                 variant="primary",
                 size="lg"
             )
+            
+            enhanced_stmap_progress = gr.Progress()
             
             enhanced_stmap_export_status = gr.Textbox(
                 label="📋 STMap Export Status",
@@ -1224,24 +1279,7 @@ class GradioInterface:
                 lines=2
             )
             
-            # === ANIMATED MASK EXPORT ===
-            gr.Markdown("## 🎭 Animated Mask Export")
-            gr.Markdown("""
-            Export the mask as an animated sequence that follows the tracked points.
-            The mask will move as coherent blocks based on the closest tracker points.
-            """)
-            
-            animated_mask_export_btn = gr.Button(
-                "🎭 Export Animated Mask Sequence",
-                variant="primary",
-                size="lg"
-            )
-            
-            animated_mask_export_status = gr.Textbox(
-                label="📋 Animated Mask Export Status",
-                interactive=False,
-                lines=4
-            )
+            # REMOVED: Animated Mask Export section - animated mask is now embedded in STMap alpha channel
             
             # Event handlers
             reference_video.change(
@@ -1280,6 +1318,11 @@ class GradioInterface:
                 fn=self.process_video,
                 inputs=[reference_video, grid_size, image_sequence_start_frame],
                 outputs=[processing_status, preview_video]
+            )
+            
+            clear_vram_btn.click(
+                fn=self.clear_vram,
+                outputs=[processing_status]
             )
             
             # Event handlers
@@ -1356,11 +1399,7 @@ class GradioInterface:
                 outputs=[enhanced_stmap_copy_status]
             )
             
-            animated_mask_export_btn.click(
-                fn=self.export_animated_mask_sequence,
-                inputs=[image_sequence_start_frame],
-                outputs=[animated_mask_export_status]
-            )
+            # REMOVED: animated_mask_export_btn event handler - animated mask is now embedded in STMap alpha channel
             
         
         return interface

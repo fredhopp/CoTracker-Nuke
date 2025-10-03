@@ -242,4 +242,32 @@ class CoTrackerEngine:
         
         self.logger.info(f"Tracking completed - Tracks shape: {pred_tracks.shape}, Visibility shape: {pred_visibility.shape}")
         
+        # Clear VRAM after tracking to prevent memory accumulation
+        self.clear_vram()
+        
         return pred_tracks, pred_visibility
+    
+    def clear_vram(self):
+        """
+        Clear GPU memory to prevent VRAM accumulation.
+        This helps prevent out-of-memory errors during extended use.
+        """
+        if self.device == 'cuda' and torch.cuda.is_available():
+            try:
+                # Clear PyTorch cache
+                torch.cuda.empty_cache()
+                
+                # Force garbage collection
+                import gc
+                gc.collect()
+                
+                # Get memory info for logging
+                allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+                cached = torch.cuda.memory_reserved() / 1024**3  # GB
+                
+                self.logger.info(f"VRAM cleared - Allocated: {allocated:.2f}GB, Cached: {cached:.2f}GB")
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to clear VRAM: {e}")
+        else:
+            self.logger.debug("VRAM clearing skipped (not using CUDA)")

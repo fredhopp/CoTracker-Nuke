@@ -13,6 +13,7 @@ from typing import Optional, Tuple, Any
 import logging
 import os
 from pathlib import Path
+from datetime import datetime
 
 from ..core.app import CoTrackerNukeApp
 from ..exporters.stmap_exporter import STMapExporter
@@ -36,6 +37,7 @@ class GradioInterface:
         self.last_exported_path = None  # Store last exported .nk file path
         self.last_stmap_path = None  # Store last exported STMap directory path
         self.stmap_output_path = None  # Store STMap output file path
+        self.last_animated_mask_path = None  # Store last exported animated mask directory path
     
     def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict, dict, dict]:
         """Load video and return status message + video path for player + slider update."""
@@ -684,6 +686,234 @@ class GradioInterface:
             import shutil
             shutil.copy2(input_path, output_path)
     
+    def export_animated_mask_sequence(self, image_sequence_start_frame: int = 1001) -> str:
+        """Export animated mask sequence that follows tracked points."""
+        try:
+            self.logger.info(f"Starting animated mask export with start frame: {image_sequence_start_frame}")
+            
+            if self.app.tracking_results is None:
+                self.logger.warning("No tracking data available")
+                return "❌ No tracking data available. Please process video first."
+            
+            if self.app.mask_handler.current_mask is None:
+                self.logger.warning("No mask available")
+                return "❌ No mask available. Please draw a mask first."
+            
+            self.logger.info("Tracking data and mask found, proceeding with export...")
+            
+            # Get tracking data
+            tracks, visibility = self.app.tracking_results
+            self.logger.info(f"Got tracking data: tracks shape {tracks.shape}, visibility shape {visibility.shape}")
+            
+            # Get video dimensions
+            if self.app.video_processor.current_video is not None:
+                height, width = self.app.video_processor.current_video.shape[1:3]
+                self.logger.info(f"Video dimensions: {width}x{height}")
+            else:
+                self.logger.warning("No video loaded")
+                return "❌ No video loaded. Please load a video first."
+            
+            # Get the original mask
+            original_mask = self.app.mask_handler.current_mask
+            self.logger.info(f"Original mask shape: {original_mask.shape}")
+            
+            # Create output directory
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = Path("outputs") / f"CoTracker_{timestamp}_animated_mask"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"Created output directory: {output_dir}")
+            
+            # Convert tensors to numpy
+            tracks_np = tracks[0].cpu().numpy()  # Shape: (T, N, 2)
+            visibility_np = visibility[0].cpu().numpy()  # Shape: (T, N)
+            
+            # Handle different visibility shapes
+            if len(visibility_np.shape) == 3:
+                visibility_np = visibility_np[:, :, 0]
+            
+            T, N, _ = tracks_np.shape
+            
+            # Get reference frame tracks
+            reference_frame = self.app.reference_frame
+            reference_tracks = tracks_np[reference_frame]
+            reference_visibility = visibility_np[reference_frame]
+            
+            # Filter visible reference trackers
+            visible_mask = reference_visibility > 0.5
+            if not np.any(visible_mask):
+                return "❌ No visible trackers in reference frame."
+            
+            visible_reference_tracks = reference_tracks[visible_mask]
+            
+            # Generate animated mask for each frame
+            self.logger.info(f"Processing {T} frames...")
+            for frame_idx in range(T):
+                if frame_idx % 10 == 0:  # Log every 10 frames
+                    self.logger.info(f"Processing frame {frame_idx}/{T}")
+                
+                # Get current frame tracks
+                current_tracks = tracks_np[frame_idx]
+                current_visibility = visibility_np[frame_idx]
+                
+                # Filter visible trackers in current frame
+                current_visible_mask = current_visibility > 0.5
+                visible_count = np.sum(current_visible_mask)
+                
+                if not np.any(current_visible_mask):
+                    # If no visible trackers in current frame, use reference mask
+                    self.logger.warning(f"Frame {frame_idx}: No visible trackers, using reference mask")
+                    animated_mask = original_mask.copy()
+                else:
+                    # Get visible trackers from current frame
+                    visible_current_tracks = current_tracks[current_visible_mask]
+                    
+                    # Get corresponding reference trackers (same indices)
+                    visible_reference_tracks_current = reference_tracks[current_visible_mask]
+                    
+                    self.logger.debug(f"Frame {frame_idx}: {visible_count} visible trackers")
+                    
+                    # Warp mask based on tracker movement
+                    animated_mask = self._warp_mask_with_trackers(
+                        original_mask, 
+                        visible_reference_tracks_current, 
+                        visible_current_tracks
+                    )
+                
+                # Save as PNG
+                actual_frame_number = frame_idx + image_sequence_start_frame
+                filename = f"animated_mask_{actual_frame_number:04d}.png"
+                filepath = output_dir / filename
+                
+                # Convert to PIL and save
+                mask_image = Image.fromarray(animated_mask.astype(np.uint8))
+                mask_image.save(filepath)
+            
+            # Store the exported path
+            absolute_output_dir = str(output_dir.resolve())
+            self.last_animated_mask_path = absolute_output_dir
+            
+            # Count generated files
+            mask_files = list(output_dir.glob("animated_mask_*.png"))
+            self.logger.info(f"Generated {len(mask_files)} mask files in {absolute_output_dir}")
+            
+            success_msg = (f"✅ Animated mask sequence generated!\n"
+                          f"📁 Directory: {absolute_output_dir}\n"
+                          f"📹 Frames: {len(mask_files)} PNG files\n"
+                          f"🎬 Reference frame: {reference_frame + image_sequence_start_frame}\n"
+                          f"🎯 Trackers used: {len(visible_reference_tracks)} visible points")
+            
+            self.logger.info("Animated mask export completed successfully")
+            return success_msg
+                   
+        except Exception as e:
+            error_msg = f"❌ Animated mask export failed: {str(e)}"
+            self.logger.error(error_msg)
+            return error_msg
+    
+    def _warp_mask_with_trackers(self, mask: np.ndarray, reference_tracks: np.ndarray, current_tracks: np.ndarray) -> np.ndarray:
+        """
+        Hybrid mask warping: interpolation inside tracker bounds, block offset outside.
+        Uses same logic as STMap for smooth areas, block movement for sparse areas.
+        """
+        try:
+            self.logger.debug(f"Starting mask warping: mask shape {mask.shape}, ref tracks {reference_tracks.shape}, curr tracks {current_tracks.shape}")
+            
+            from scipy.interpolate import griddata
+            
+            height, width = mask.shape
+            warped_mask = np.zeros_like(mask)
+            
+            # Create coordinate grids
+            self.logger.debug("Creating coordinate grids...")
+            y_coords, x_coords = np.mgrid[0:height, 0:width]
+            points = np.column_stack((x_coords.ravel(), y_coords.ravel()))
+            self.logger.debug(f"Created {len(points)} coordinate points")
+            
+            # Calculate displacement vectors (reference - current) for backward mapping
+            self.logger.debug("Calculating displacement vectors...")
+            displacement_vectors = reference_tracks - current_tracks
+            self.logger.debug(f"Displacement vectors shape: {displacement_vectors.shape}")
+            
+            # Interpolate displacement vectors using linear interpolation
+            self.logger.debug("Starting griddata interpolation...")
+            interpolated_displacements = griddata(
+                reference_tracks,
+                displacement_vectors,
+                points,
+                method='linear',
+                fill_value=np.nan
+            )
+            self.logger.debug("Griddata interpolation completed")
+            
+            # Handle NaN values (outside convex hull) with block offset logic
+            self.logger.debug("Handling NaN values...")
+            nan_mask = np.isnan(interpolated_displacements[:, 0])
+            nan_count = np.sum(nan_mask)
+            self.logger.debug(f"Found {nan_count} NaN values to handle")
+            
+            if np.any(nan_mask):
+                # For pixels outside convex hull, use closest tracker offset
+                nan_points = points[nan_mask]
+                self.logger.debug(f"Processing {len(nan_points)} NaN points...")
+                
+                # Vectorized approach: find closest tracker for all NaN points at once
+                # Reshape for broadcasting: (N_nan, 1, 2) - (1, N_trackers, 2)
+                nan_points_reshaped = nan_points[:, np.newaxis, :]  # (N_nan, 1, 2)
+                ref_tracks_reshaped = reference_tracks[np.newaxis, :, :]  # (1, N_trackers, 2)
+                
+                # Calculate distances for all combinations at once
+                distances = np.sqrt(np.sum((nan_points_reshaped - ref_tracks_reshaped)**2, axis=2))  # (N_nan, N_trackers)
+                
+                # Find closest tracker for each NaN point
+                closest_indices = np.argmin(distances, axis=1)  # (N_nan,)
+                
+                # Use displacement from closest tracker
+                interpolated_displacements[nan_mask] = displacement_vectors[closest_indices]
+                self.logger.debug("Completed vectorized NaN handling")
+            
+            # Reshape interpolated displacements back to image shape
+            self.logger.debug("Reshaping displacements...")
+            dx = interpolated_displacements[:, 0].reshape(height, width)
+            dy = interpolated_displacements[:, 1].reshape(height, width)
+            
+            # Create source coordinates
+            source_x = x_coords + dx
+            source_y = y_coords + dy
+            
+            # Warp the mask using vectorized bilinear interpolation
+            self.logger.debug("Starting vectorized bilinear interpolation...")
+            
+            # Create masks for valid coordinates
+            valid_mask = (source_x >= 0) & (source_x < width-1) & (source_y >= 0) & (source_y < height-1)
+            
+            # For valid coordinates, use bilinear interpolation
+            if np.any(valid_mask):
+                # Get integer and fractional parts
+                x1 = np.floor(source_x[valid_mask]).astype(int)
+                y1 = np.floor(source_y[valid_mask]).astype(int)
+                x2 = np.minimum(x1 + 1, width - 1)
+                y2 = np.minimum(y1 + 1, height - 1)
+                fx = source_x[valid_mask] - x1
+                fy = source_y[valid_mask] - y1
+                
+                # Bilinear interpolation
+                val = (mask[y1, x1] * (1-fx) * (1-fy) +
+                       mask[y1, x2] * fx * (1-fy) +
+                       mask[y2, x1] * (1-fx) * fy +
+                       mask[y2, x2] * fx * fy)
+                
+                warped_mask[valid_mask] = val.astype(np.uint8)
+            
+            # For invalid coordinates, use original pixel
+            warped_mask[~valid_mask] = mask[~valid_mask]
+            
+            self.logger.debug("Mask warping completed successfully")
+            return warped_mask
+            
+        except Exception as e:
+            self.logger.error(f"Error warping mask: {e}")
+            return mask  # Return original mask if warping fails
+    
     def copy_stmap_path(self) -> str:
         """Copy the last exported STMap directory path to clipboard."""
         if self.last_stmap_path is None:
@@ -956,6 +1186,25 @@ class GradioInterface:
                 lines=2
             )
             
+            # === ANIMATED MASK EXPORT ===
+            gr.Markdown("## 🎭 Animated Mask Export")
+            gr.Markdown("""
+            Export the mask as an animated sequence that follows the tracked points.
+            The mask will move as coherent blocks based on the closest tracker points.
+            """)
+            
+            animated_mask_export_btn = gr.Button(
+                "🎭 Export Animated Mask Sequence",
+                variant="primary",
+                size="lg"
+            )
+            
+            animated_mask_export_status = gr.Textbox(
+                label="📋 Animated Mask Export Status",
+                interactive=False,
+                lines=4
+            )
+            
             # Event handlers
             reference_video.change(
                 fn=self.load_video_for_reference,
@@ -1068,6 +1317,12 @@ class GradioInterface:
             stmap_copy_path_btn.click(
                 fn=self.copy_stmap_path,
                 outputs=[stmap_copy_status]
+            )
+            
+            animated_mask_export_btn.click(
+                fn=self.export_animated_mask_sequence,
+                inputs=[image_sequence_start_frame],
+                outputs=[animated_mask_export_status]
             )
             
         

@@ -77,9 +77,9 @@ This is the new modular version with improved architecture:
     args = parser.parse_args()
     
     try:
-        print("🎬 CoTracker Nuke Integration - Modular Version")
-        print(f"📊 Console log level: {args.log_level}")
-        print(f"📁 Debug logging: {'Disabled' if args.no_debug else 'Enabled'}")
+        print("CoTracker Nuke Integration - Modular Version")
+        print(f"Console log level: {args.log_level}")
+        print(f"Debug logging: {'Disabled' if args.no_debug else 'Enabled'}")
         print()
         
         # Create and launch Gradio interface
@@ -95,11 +95,11 @@ This is the new modular version with improved architecture:
         )
         
     except KeyboardInterrupt:
-        print("\n⚠️ Application interrupted by user")
+        print("\nApplication interrupted by user")
         sys.exit(0)
         
     except Exception as e:
-        print(f"❌ Error starting application: {str(e)}")
+        print(f"Error starting application: {str(e)}")
         if args.log_level == "DEBUG":
             import traceback
             traceback.print_exc()

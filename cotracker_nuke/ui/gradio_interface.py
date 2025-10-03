@@ -1138,8 +1138,7 @@ class GradioInterface:
                     clear_vram_btn = gr.Button(
                         "🧹 Clear VRAM",
                         variant="secondary",
-                        size="lg",
-                        info="Manually clear GPU memory"
+                        size="lg"
                     )
             
             processing_status = gr.Textbox(

@@ -73,7 +73,7 @@ class STMapExporter:
         start_memory = psutil.Process().memory_info().rss / (1024**2)  # MB
         
         # Process one frame
-        stmap = self._generate_enhanced_frame_stmap(
+        stmap = self._generate_frame_stmap(
             mask, 
             visible_reference_tracks, 
             visible_current_tracks,
@@ -138,7 +138,7 @@ class STMapExporter:
             reference_frame = frame_data['reference_frame']
             
             # Generate STMap for this frame
-            stmap = self._generate_enhanced_frame_stmap(
+            stmap = self._generate_frame_stmap(
                 mask, 
                 visible_reference_tracks, 
                 visible_current_tracks,
@@ -160,7 +160,7 @@ class STMapExporter:
             }
             
             # Save EXR file
-            self._save_enhanced_exr(stmap, frame_path, 32, frame_metadata)
+            self._save_exr(stmap, frame_path, 32, frame_metadata)
             
             return frame_idx, str(frame_path)
             
@@ -280,19 +280,19 @@ class STMapExporter:
         self.logger.info(f"STMap sequence generated: {output_dir}")
         return str(output_dir)
     
-    def generate_enhanced_stmap_sequence(self,
-                                        tracks: torch.Tensor,
-                                        visibility: torch.Tensor,
-                                        mask: np.ndarray,
-                                        interpolation_method: str = "linear",
-                                        bit_depth: int = 32,
-                                        frame_start: int = 0,
-                                        frame_end: Optional[int] = None,
-                                        frame_offset: int = 1001,
-                                        output_file_path: str = None,
-                                        progress_callback: Optional[callable] = None) -> str:
+    def generate_stmap_sequence(self,
+                               tracks: torch.Tensor,
+                               visibility: torch.Tensor,
+                               mask: np.ndarray,
+                               interpolation_method: str = "linear",
+                               bit_depth: int = 32,
+                               frame_start: int = 0,
+                               frame_end: Optional[int] = None,
+                               frame_offset: int = 1001,
+                               output_file_path: str = None,
+                               progress_callback: Optional[callable] = None) -> str:
         """
-        Generate enhanced STMap sequence with mask-aware intelligent interpolation.
+        Generate STMap sequence with mask-aware intelligent interpolation.
         
         Args:
             tracks: Tracking data tensor (1, T, N, 2)
@@ -309,7 +309,7 @@ class STMapExporter:
             Path to output directory as string
         """
         try:
-            self.logger.info(f"Starting enhanced STMap generation: tracks shape {tracks.shape}, visibility shape {visibility.shape}")
+            self.logger.info(f"Starting STMap generation: tracks shape {tracks.shape}, visibility shape {visibility.shape}")
             
             # Convert tensors to numpy
             tracks_np = tracks[0].cpu().numpy()  # Shape: (T, N, 2)
@@ -462,11 +462,11 @@ class STMapExporter:
             
             # Count generated files
             exr_files = list(output_dir.glob("*.exr"))
-            self.logger.info(f"Enhanced STMap sequence generated: {output_dir} with {len(exr_files)} files")
+            self.logger.info(f"STMap sequence generated: {output_dir} with {len(exr_files)} files")
             return str(output_dir)
             
         except Exception as e:
-            self.logger.error(f"Enhanced STMap generation failed: {e}")
+            self.logger.error(f"STMap generation failed: {e}")
             raise
     
     def _generate_frame_stmap(self, 
@@ -796,13 +796,13 @@ class STMapExporter:
         
         return stmap
     
-    def _generate_enhanced_frame_stmap(self, 
-                                     mask: np.ndarray,
-                                     reference_tracks: np.ndarray,
-                                     current_tracks: np.ndarray,
-                                     valid_trackers: np.ndarray,
-                                     interpolation_method: str) -> np.ndarray:
-        """Generate enhanced STMap with intelligent interpolation."""
+    def _generate_frame_stmap(self, 
+                            mask: np.ndarray,
+                            reference_tracks: np.ndarray,
+                            current_tracks: np.ndarray,
+                            valid_trackers: np.ndarray,
+                            interpolation_method: str) -> np.ndarray:
+        """Generate STMap with intelligent interpolation."""
         try:
             # Use same dimensions as regular STMap
             height, width = self.video_height, self.video_width
@@ -891,7 +891,7 @@ class STMapExporter:
             return stmap
             
         except Exception as e:
-            self.logger.error(f"Enhanced frame STMap generation failed: {e}")
+            self.logger.error(f"Frame STMap generation failed: {e}")
             # Fallback to identity STMap with original mask
             return self._generate_identity_stmap_with_mask(mask)
     
@@ -1254,8 +1254,8 @@ class STMapExporter:
             self.logger.error(f"Error warping mask: {e}")
             return mask  # Return original mask if warping fails
     
-    def _save_enhanced_exr(self, stmap: np.ndarray, filepath: Path, bit_depth: int, metadata: Optional[dict] = None):
-        """Save enhanced STMap as RGBA EXR file."""
+    def _save_exr(self, stmap: np.ndarray, filepath: Path, bit_depth: int, metadata: Optional[dict] = None):
+        """Save STMap as RGBA EXR file."""
         height, width = stmap.shape[:2]
         
         # Prepare RGBA channels
@@ -1305,4 +1305,4 @@ class STMapExporter:
         })
         exr_file.close()
         
-        self.logger.debug(f"Saved enhanced EXR: {filepath}")
+        self.logger.debug(f"Saved EXR: {filepath}")

@@ -37,7 +37,6 @@ class GradioInterface:
         self.last_exported_path = None  # Store last exported .nk file path
         self.last_stmap_path = None  # Store last exported STMap directory path
         self.stmap_output_path = None  # Store STMap output file path
-        self.last_enhanced_stmap_path = None  # Store last exported enhanced STMap directory path
         # REMOVED: last_animated_mask_path - animated mask is now embedded in STMap alpha channel
     
     def load_video_for_reference(self, reference_video, start_frame_offset) -> Tuple[str, Optional[str], dict, dict, dict]:
@@ -225,11 +224,6 @@ class GradioInterface:
         
         return str((output_dir / f"CoTracker_{timestamp}_stmap_ref{ref_frame_str}/CoTracker_{timestamp}_stmap_ref{ref_frame_str}.%04d.exr").resolve())
     
-    def get_default_enhanced_stmap_output_path(self, reference_frame: int = None) -> str:
-        """Get default Enhanced STMap output file path with dynamic variables."""
-        # Enhanced STMap uses the same path as regular STMap
-        return self.get_default_stmap_output_path(reference_frame)
-    
     def process_path_variables(self, path_template: str, reference_frame: int = None) -> str:
         """Process dynamic variables in path template."""
         processed_path = path_template
@@ -348,8 +342,8 @@ class GradioInterface:
             self.logger.error(traceback.format_exc())
             return self.get_default_stmap_output_path()
     
-    def browse_enhanced_stmap_output_folder(self) -> str:
-        """Open file dialog to browse for Enhanced STMap output location."""
+    def browse_stmap_output_folder(self) -> str:
+        """Open file dialog to browse for STMap output location."""
         try:
             import tkinter as tk
             from tkinter import filedialog
@@ -360,7 +354,7 @@ class GradioInterface:
             root.wm_attributes('-topmost', 1)  # Keep dialog on top
             
             # Get current output path directory
-            current_path = self.get_default_enhanced_stmap_output_path()
+            current_path = self.get_default_stmap_output_path()
             current_dir = os.path.dirname(os.path.abspath(current_path))
             
             # Ensure output directory exists
@@ -368,7 +362,7 @@ class GradioInterface:
             
             # Open file dialog
             file_path = filedialog.asksaveasfilename(
-                title="Save Enhanced STMap sequence as...",
+                title="Save STMap sequence as...",
                 initialdir=current_dir,
                 defaultextension=".exr",
                 filetypes=[("EXR files", "*.exr"), ("All files", "*.*")],
@@ -390,17 +384,17 @@ class GradioInterface:
                     return file_path
             else:
                 # User cancelled, return current path
-                self.logger.info("Enhanced STMap file dialog cancelled by user")
-                return self.get_default_enhanced_stmap_output_path()
+                self.logger.info("STMap file dialog cancelled by user")
+                return self.get_default_stmap_output_path()
                 
         except ImportError:
             self.logger.warning("tkinter not available for file dialog, using default path")
-            return self.get_default_enhanced_stmap_output_path()
+            return self.get_default_stmap_output_path()
         except Exception as e:
             self.logger.error(f"Error in Enhanced STMap file browser: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return self.get_default_enhanced_stmap_output_path()
+            return self.get_default_stmap_output_path()
     
     def update_stmap_frame_defaults(self, reference_video, image_sequence_start_frame) -> Tuple[dict, dict]:
         """Update STMap frame defaults based on video and image sequence start frame."""
@@ -904,17 +898,17 @@ class GradioInterface:
             return error_msg
     
     
-    def export_enhanced_stmap_sequence(self, 
-                                     interpolation_method: str,
-                                     bit_depth: int,
-                                     frame_start: int,
-                                     frame_end: Optional[int],
-                                     image_sequence_start_frame: int = 1001,
-                                     output_file_path: str = None,
-                                     progress=gr.Progress()) -> str:
-        """Export enhanced STMap sequence with mask-aware intelligent interpolation."""
+    def export_stmap_sequence(self, 
+                            interpolation_method: str,
+                            bit_depth: int,
+                            frame_start: int,
+                            frame_end: Optional[int],
+                            image_sequence_start_frame: int = 1001,
+                            output_file_path: str = None,
+                            progress=gr.Progress()) -> str:
+        """Export STMap sequence with mask-aware intelligent interpolation."""
         try:
-            self.logger.info(f"Starting enhanced STMap export with parameters: interpolation={interpolation_method}, bit_depth={bit_depth}, frame_start={frame_start}, frame_end={frame_end}, offset={image_sequence_start_frame}")
+            self.logger.info(f"Starting STMap export with parameters: interpolation={interpolation_method}, bit_depth={bit_depth}, frame_start={frame_start}, frame_end={frame_end}, offset={image_sequence_start_frame}")
             
             if self.app.tracking_results is None:
                 self.logger.warning("No tracking data available")
@@ -924,7 +918,7 @@ class GradioInterface:
                 self.logger.warning("No mask available")
                 return "❌ No mask available. Please draw a mask first."
             
-            self.logger.info("Tracking data and mask found, proceeding with enhanced STMap export...")
+            self.logger.info("Tracking data and mask found, proceeding with STMap export...")
             
             # Get tracking data and mask
             tracks, visibility = self.app.tracking_results
@@ -944,7 +938,7 @@ class GradioInterface:
             
             # Use provided output path or generate default
             if output_file_path is None or output_file_path.strip() == "":
-                output_file_path = self.get_default_enhanced_stmap_output_path()
+                output_file_path = self.get_default_stmap_output_path()
             
             # Process dynamic variables in the path
             reference_frame = self.app.reference_frame + image_sequence_start_frame
@@ -954,8 +948,8 @@ class GradioInterface:
             def progress_callback(current_frame, total_frames):
                 progress(current_frame / total_frames, desc=f"Processing frame {current_frame}/{total_frames}")
 
-            # Generate enhanced STMap sequence
-            output_dir = stmap_exporter.generate_enhanced_stmap_sequence(
+            # Generate STMap sequence
+            output_dir = stmap_exporter.generate_stmap_sequence(
                 tracks=tracks,
                 visibility=visibility,
                 mask=mask,
@@ -969,24 +963,24 @@ class GradioInterface:
             )
             
             # Store the exported path
-            self.last_enhanced_stmap_path = str(Path(output_dir).resolve())
+            self.last_stmap_path = str(Path(output_dir).resolve())
             
             # Count generated files
             output_path = Path(output_dir)
             exr_files = list(output_path.glob("*.exr"))
             
-            return (f"✅ Enhanced STMap sequence generated!\n"
-                   f"📁 Directory: {self.last_enhanced_stmap_path}\n"
+            return (f"✅ STMap sequence generated!\n"
+                   f"📁 Directory: {self.last_stmap_path}\n"
                    f"📹 Frames: {len(exr_files)} RGBA EXR files\n"
                    f"🎬 Reference frame: {self.app.reference_frame + image_sequence_start_frame}\n"
                    f"🎯 Features: Mask-aware interpolation, RGBA output, intelligent coordinate mapping")
                    
         except Exception as e:
-            error_msg = f"❌ Enhanced STMap export failed: {str(e)}"
+            error_msg = f"❌ STMap export failed: {str(e)}"
             self.logger.error(error_msg)
             return error_msg
     
-    def copy_stmap_path(self) -> str:
+    def copy_stmap_directory_path(self) -> str:
         """Copy the last exported STMap directory path to clipboard."""
         if self.last_stmap_path is None:
             return "❌ No STMap sequence has been exported yet. Please export STMap first."
@@ -996,17 +990,6 @@ class GradioInterface:
             return f"📋 Copied to clipboard!\n{self.last_stmap_path}"
         else:
             return f"⚠️ Could not copy to clipboard.\nPath: {self.last_stmap_path}"
-    
-    def copy_enhanced_stmap_directory_path(self) -> str:
-        """Copy the last exported Enhanced STMap directory path to clipboard."""
-        if self.last_enhanced_stmap_path is None:
-            return "❌ No Enhanced STMap sequence has been exported yet. Please export Enhanced STMap first."
-        
-        success = self.copy_to_clipboard(self.last_enhanced_stmap_path)
-        if success:
-            return f"📋 Copied to clipboard!\n{self.last_enhanced_stmap_path}"
-        else:
-            return f"⚠️ Could not copy to clipboard.\nPath: {self.last_enhanced_stmap_path}"
     
     def create_interface(self) -> gr.Blocks:
         """Create and return the Gradio interface."""
@@ -1240,39 +1223,39 @@ class GradioInterface:
             with gr.Group():
                 with gr.Row():
                     gr.Markdown("**STMap Output File Path**")
-                    enhanced_stmap_file_picker_btn = gr.Button(
+                    stmap_file_picker_btn = gr.Button(
                         "📂 Browse",
                         size="sm",
                         scale=1
                     )
                 
-                enhanced_stmap_output_file_path = gr.Textbox(
+                stmap_output_file_path = gr.Textbox(
                     value=self.get_default_stmap_output_path(),
                     info="Path pattern for RGBA EXR sequence (use %04d for frame numbers, %refFrame% for reference frame)",
                     show_label=False
                 )
             
-            enhanced_stmap_export_btn = gr.Button(
+            stmap_export_btn = gr.Button(
                 "🗺️ Generate STMap Sequence",
                 variant="primary",
                 size="lg"
             )
             
-            enhanced_stmap_progress = gr.Progress()
+            stmap_progress = gr.Progress()
             
-            enhanced_stmap_export_status = gr.Textbox(
+            stmap_export_status = gr.Textbox(
                 label="📋 STMap Export Status",
                 interactive=False,
                 lines=4
             )
             
-            enhanced_stmap_copy_path_btn = gr.Button(
+            stmap_copy_path_btn = gr.Button(
                 "📋 Copy STMap Directory Path",
                 variant="primary",
                 size="lg"
             )
             
-            enhanced_stmap_copy_status = gr.Textbox(
+            stmap_copy_status = gr.Textbox(
                 label="📋 STMap Copy Status",
                 interactive=False,
                 lines=2
@@ -1382,20 +1365,20 @@ class GradioInterface:
                 outputs=[stmap_frame_start, stmap_frame_end]
             )
             
-            enhanced_stmap_export_btn.click(
-                fn=self.export_enhanced_stmap_sequence,
-                inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame, enhanced_stmap_output_file_path],
-                outputs=[enhanced_stmap_export_status]
+            stmap_export_btn.click(
+                fn=self.export_stmap_sequence,
+                inputs=[stmap_interpolation, stmap_bit_depth, stmap_frame_start, stmap_frame_end, image_sequence_start_frame, stmap_output_file_path],
+                outputs=[stmap_export_status]
             )
             
-            enhanced_stmap_file_picker_btn.click(
-                fn=self.browse_enhanced_stmap_output_folder,
-                outputs=[enhanced_stmap_output_file_path]
+            stmap_file_picker_btn.click(
+                fn=self.browse_stmap_output_folder,
+                outputs=[stmap_output_file_path]
             )
             
-            enhanced_stmap_copy_path_btn.click(
-                fn=self.copy_enhanced_stmap_directory_path,
-                outputs=[enhanced_stmap_copy_status]
+            stmap_copy_path_btn.click(
+                fn=self.copy_stmap_directory_path,
+                outputs=[stmap_copy_status]
             )
             
             # REMOVED: animated_mask_export_btn event handler - animated mask is now embedded in STMap alpha channel

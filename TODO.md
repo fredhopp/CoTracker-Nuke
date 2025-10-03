@@ -9,6 +9,8 @@
 ## Current Tasks
 
 ### 🔥 High Priority
+- [ ] **Paint Mask Widget Initialization** - Tools inside the paint mask widget are only correctly initialized when the reference frame is set (unnecessary webcam icon)
+- [ ] **Multithreading Performance Testing** - Further testing needed for multithreading. Currently shows very poor resource usage (only a few cores used, RAM stays low). Images after test frames either don't get written or take too long to process
 - [x] **Clear VRAM after CoTracker video processing** - Implement proper GPU memory cleanup after tracking to prevent VRAM accumulation and potential out-of-memory issues
 
 ### 🚀 Future Enhancements (Optional)

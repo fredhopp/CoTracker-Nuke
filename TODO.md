@@ -11,6 +11,7 @@
 ### 🔥 High Priority
 - [ ] **Paint Mask Widget Initialization** - Tools inside the paint mask widget are only correctly initialized when the reference frame is set (unnecessary webcam icon)
 - [ ] **Multithreading Performance Testing** - Further testing needed for multithreading. Currently shows very poor resource usage (only a few cores used, RAM stays low). Images after test frames either don't get written or take too long to process
+- [ ] **Frame Value Issue in .nk Export** - Frame values in the .nk export are zero-based and don't take the user start frame into account
 - [x] **Clear VRAM after CoTracker video processing** - Implement proper GPU memory cleanup after tracking to prevent VRAM accumulation and potential out-of-memory issues
 - [x] **Remove redundant Clear VRAM button** - Removed manual Clear VRAM button from UI since VRAM is automatically cleared after video processing
 

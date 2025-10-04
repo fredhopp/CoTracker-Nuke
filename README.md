@@ -202,8 +202,9 @@ The advanced STMap export system provides:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+CoTracker-Nuke is wrapper application and is licensed under the **Apache License 2.0** - see the [LICENSE](LICENSE) file for details.
 
+**Important Note**: CoTracker-Nuke uses CoTracker3/CoTracker2 by Facebook Research, which is licensed for **non-commercial use only**. Please review CoTracker's license terms at: [CoTracker3 LICENSE.md](https://github.com/facebookresearch/co-tracker/blob/main/LICENSE.md)
 
 ## Acknowledgments
 
